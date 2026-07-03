@@ -1,26 +1,229 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* Class-based dark mode: `dark:` utilities respond to a `.dark` class on <html>
+   instead of the OS preference, so our in-app toggle drives the theme. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  overflow: hidden; /* the map is the full-screen hero; no page scroll */
+  background: #eef2f6;
+  color: #0f172a;
+}
+
+html.dark body {
+  background: #0b1220;
+  color: #e5edf6;
+}
+
+/* ---------------------------------------------------------------------------
+   Leaflet base tweaks
+--------------------------------------------------------------------------- */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #dfe7ee;
+  font-family: inherit;
+}
+
+html.dark .leaflet-container {
+  background: #0b1220;
+}
+
+/* Hide the default attribution box chrome a touch; keep it readable. */
+.leaflet-control-attribution {
+  backdrop-filter: blur(6px);
+  background: rgba(255, 255, 255, 0.6) !important;
+  border-radius: 8px 0 0 0;
+  font-size: 10px;
+}
+
+html.dark .leaflet-control-attribution {
+  background: rgba(12, 18, 32, 0.6) !important;
+  color: #94a3b8 !important;
+}
+
+html.dark .leaflet-control-attribution a {
+  color: #cbd5e1 !important;
+}
+
+.leaflet-bar a {
+  background: rgba(255, 255, 255, 0.85);
+  color: #0f172a;
+  backdrop-filter: blur(8px);
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+html.dark .leaflet-bar a {
+  background: rgba(20, 28, 44, 0.85);
+  color: #e5edf6;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Glassmorphism surface — used by the top bar and details panel
+--------------------------------------------------------------------------- */
+.glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 10px 30px -12px rgba(15, 23, 42, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+html.dark .glass {
+  background: rgba(17, 24, 39, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 12px 34px -12px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* ---------------------------------------------------------------------------
+   Train markers (rendered as Leaflet divIcons)
+--------------------------------------------------------------------------- */
+.train-marker {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.18s ease;
+}
+
+.train-marker:hover {
+  transform: scale(1.12);
+  z-index: 1000;
+}
+
+/* Directional pointer that rotates with the train's heading. */
+.train-marker__dir {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+}
+
+.train-marker__dir::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 9px solid var(--c);
+  margin-top: -5px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.3));
+}
+
+.train-marker__body {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--c);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 8px -1px rgba(0, 0, 0, 0.45);
+}
+
+html.dark .train-marker__body {
+  border-color: rgba(255, 255, 255, 0.78);
+}
+
+.train-marker__body svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Selected state: a pulsing halo in the carrier color. */
+.train-marker--selected .train-marker__body {
+  border-color: #fff;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--c) 55%, transparent),
+    0 4px 12px -1px rgba(0, 0, 0, 0.5);
+}
+
+.train-marker--selected::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--c);
+  animation: marker-pulse 1.6s ease-out infinite;
+}
+
+@keyframes marker-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* Small delay badge on the marker. */
+.train-marker__delay {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------------------------------------------------------------------------
+   Panel slide-in animation
+--------------------------------------------------------------------------- */
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.panel-in {
+  animation: panel-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Thin custom scrollbar inside panels. */
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 3px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
