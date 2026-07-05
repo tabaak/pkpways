@@ -26,6 +26,22 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 
 ---
 
+## 📁 Repository Structure
+
+This is a two-folder monorepo — the web app and the data pipeline are independent, deployable separately, and only ever talk to each other through Postgres/Redis (never directly):
+
+```
+PkpWays/
+├── frontend/     # Next.js 16 app (the map UI) — see frontend/README if present
+└── data-sync/    # Python worker: polls the PKP PLK API, writes to Postgres/Redis
+```
+
+- **`frontend/`** reads from Redis/Postgres to render the map. It never calls the PKP PLK API directly.
+- **`data-sync/`** is the only thing that calls the PKP PLK API. It owns the `PKP_API_KEY` and writes fresh data on a polling loop.
+- Each folder has its own dependency manifest (`frontend/package.json`, `data-sync/requirements.txt`) and its own local env file (`frontend/.env.local`, `data-sync/.env`) — see each folder's `.env.example` for the variables it needs.
+
+---
+
 ## 🏗️ Architecture
 
 ### Tech Stack
@@ -126,14 +142,27 @@ This is a **portfolio piece** — the design should be stunning:
 
 ### Setup
 
+**Frontend (Next.js app):**
+
 ```bash
-git clone https://github.com/your-username/PkpWays.git
-cd PkpWays
+cd frontend
 npm install
-cp .env.example .env.local
-# Add your PKP_API_KEY and database credentials to .env.local
 npm run dev
 ```
+
+**Data-sync worker (Python):**
+
+```bash
+cd data-sync
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# Add your PKP_API_KEY and database/Redis connection strings to .env
+python main.py
+```
+
+Both need PostgreSQL and Redis reachable (locally or via a VPS) for the full pipeline to work end to end.
 
 ---
 
@@ -142,9 +171,9 @@ npm run dev
 ### API Key Security
 
 - **NEVER** commit the API key to git
-- The key lives in `.env.local` (gitignored)
-- All PKP API calls happen server-side (background worker or API routes)
-- The `api-key-pkp.txt` file in the repo root should be **deleted and gitignored** before any public push
+- The key lives only in `data-sync/.env` (gitignored) — the frontend never sees it
+- All PKP API calls happen server-side, exclusively from the `data-sync/` worker
+- The root `.gitignore` also ignores a stray `api-key-pkp.txt` at the repo root, in case one gets dropped there by habit — but it shouldn't need to exist at all
 
 ### Useful Links
 
