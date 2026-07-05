@@ -21,6 +21,7 @@ data-sync/.env
 
 # --- secrets that must never be committed ---
 api-key-pkp.txt
+test.py
 
 # --- misc / editor / OS ---
 .DS_Store
