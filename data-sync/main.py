@@ -1,20 +1,34 @@
 """PkpWays data-sync worker.
 
-Polls the PKP PLK Open Data API on an interval, writes timetable/route data
-into PostgreSQL (warm storage), and caches live operations/delays in Redis
-(hot cache) so the Next.js frontend never has to call the PKP API directly.
+Polls the PKP PLK Open Data API and writes into the three tables defined in
+../schema.sql:
 
-This is a skeleton: the PKP API's exact response fields aren't pinned down
-here (only endpoint paths and auth are documented in the project README), so
-payloads are stored as JSONB alongside a few indexed columns. Once you've
-inspected real responses (via the Swagger/Scalar docs linked in the README),
-tighten `extract_*` below to pull out the specific fields you need.
+  * stations   — id + name, seeded from the `stations` id->name map that the
+                 /operations response embeds. Geocoding (name -> lat/lng) is a
+                 separate concern, left NULL here.
+  * trains     — train identity (number, carrier, type), refreshed once per day
+                 from /schedules.
+  * train_runs — the live /operations payload; each train's whole route stored
+                 as JSONB in `stops`, upserted every poll. Also mirrored into
+                 Redis as a hot cache for the frontend/API layer.
 
-Configuration is read entirely from environment variables (see .env.example).
+A daily maintenance step prunes train_runs older than today.
+
+Response shapes were confirmed against real API output (2026-07-07):
+
+  /operations -> { "pagination": {...}, "trains": [ {scheduleId, orderId,
+                   operatingDate, trainStatus, stations: [...] } ],
+                   "stations": { "<id>": "<name>", ... } }
+  /schedules  -> { "routes": [ {scheduleId, orderId, carrierCode,
+                   nationalNumber, commercialCategorySymbol, ... } ],
+                   "dictionaries": {...} }
+
+Config is read entirely from environment variables (see .env.example).
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -39,6 +53,9 @@ logging.basicConfig(
 log = logging.getLogger("data-sync")
 
 
+# --------------------------------------------------------------------------- #
+# Config
+# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Config:
     pkp_api_base_url: str
@@ -81,108 +98,198 @@ class Config:
         )
 
 
+# --------------------------------------------------------------------------- #
+# API client
+# --------------------------------------------------------------------------- #
 class PkpApiClient:
     """Thin wrapper around the PKP PLK Open Data API."""
 
     def __init__(self, config: Config) -> None:
         self._config = config
         self._session = requests.Session()
-        self._session.headers.update({"X-API-Key": config.pkp_api_key})
+        self._session.headers.update(
+            {"X-API-Key": config.pkp_api_key, "Accept": "application/json"}
+        )
 
-    def _get(self, path: str) -> Any:
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self._config.pkp_api_base_url}{path}"
-        response = self._session.get(url, timeout=self._config.request_timeout_seconds)
+        response = self._session.get(
+            url, params=params, timeout=self._config.request_timeout_seconds
+        )
         response.raise_for_status()
         return response.json()
 
-    def get_data_version(self) -> Any:
-        return self._get("/data-version")
+    def get_operations(self, page_size: int = 10000) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        """Every currently-running train, whole route inline.
 
-    def get_operations(self) -> Any:
-        """All currently running trains (real-time delays, status)."""
-        return self._get("/operations")
+        Returns (trains, stations) where `stations` is the id->name map the API
+        embeds alongside the trains. Follows pagination.hasNextPage.
+        """
+        trains: list[dict[str, Any]] = []
+        stations: dict[str, str] = {}
+        page = 1
+        while True:
+            payload = self._get(
+                "/operations",
+                params={
+                    "fullRoutes": "true",
+                    "withPlanned": "true",
+                    "page": page,
+                    "pageSize": page_size,
+                },
+            )
+            trains.extend(payload.get("trains") or [])
+            stations.update(payload.get("stations") or {})
+            pagination = payload.get("pagination") or {}
+            if not pagination.get("hasNextPage"):
+                break
+            page += 1
+        return trains, stations
 
-    def get_disruptions(self) -> Any:
-        return self._get("/disruptions")
+    def get_schedule_routes(self, page_size: int = 10000) -> list[dict[str, Any]]:
+        """Train identity rows (number, carrier, category). Refreshed daily."""
+        routes: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = self._get(
+                "/schedules", params={"page": page, "pageSize": page_size}
+            )
+            batch = payload.get("routes") or []
+            routes.extend(batch)
+            pagination = payload.get("pagination") or {}
+            if not pagination.get("hasNextPage"):
+                break
+            page += 1
+        return routes
 
-    def get_routes_for_date(self, date: str) -> Any:
-        """All route IDs for a given date, e.g. date='2026-07-03'."""
-        return self._get(f"/schedules/routes/{date}")
 
-    def get_route(self, route_id: str, ord_: int) -> Any:
-        """A specific route with all of its stops."""
-        return self._get(f"/schedules/route/{route_id}/{ord_}")
-
-
+# --------------------------------------------------------------------------- #
+# Storage — Postgres (warm) + Redis (hot)
+# --------------------------------------------------------------------------- #
 class Storage:
-    """PostgreSQL (warm storage) + Redis (hot cache) sinks."""
-
     def __init__(self, config: Config) -> None:
         self._config = config
         self._pg = psycopg2.connect(config.database_url)
         self._pg.autocommit = True
         self._redis = redis.Redis.from_url(config.redis_url, decode_responses=True)
-        self._ensure_schema()
 
-    def _ensure_schema(self) -> None:
+    # --- stations -------------------------------------------------------- #
+    def upsert_stations(self, stations: dict[str, str]) -> int:
+        """`stations` is the {id: name} map embedded in /operations."""
+        rows = []
+        for raw_id, name in stations.items():
+            try:
+                rows.append((int(raw_id), str(name)))
+            except (TypeError, ValueError):
+                continue
+        if not rows:
+            return 0
         with self._pg.cursor() as cur:
-            cur.execute(
+            # Only touch identity; never clobber coordinates set by geocoding.
+            psycopg2.extras.execute_batch(
+                cur,
                 """
-                CREATE TABLE IF NOT EXISTS routes (
-                    route_id    TEXT NOT NULL,
-                    ord         INTEGER NOT NULL,
-                    date        DATE NOT NULL,
-                    payload     JSONB NOT NULL,
-                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (route_id, ord, date)
-                );
-
-                CREATE TABLE IF NOT EXISTS disruptions (
-                    id          TEXT PRIMARY KEY,
-                    payload     JSONB NOT NULL,
-                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-                );
-                """
-            )
-
-    def upsert_route(self, route_id: str, ord_: int, date: str, payload: Any) -> None:
-        with self._pg.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO routes (route_id, ord, date, payload, updated_at)
-                VALUES (%s, %s, %s, %s, now())
-                ON CONFLICT (route_id, ord, date)
-                DO UPDATE SET payload = EXCLUDED.payload, updated_at = now();
+                INSERT INTO stations (pkp_id, name)
+                VALUES (%s, %s)
+                ON CONFLICT (pkp_id)
+                DO UPDATE SET name = EXCLUDED.name, updated_at = now();
                 """,
-                (route_id, ord_, date, json.dumps(payload)),
+                rows,
             )
+        return len(rows)
 
-    def upsert_disruptions(self, disruptions: list[dict[str, Any]]) -> None:
-        if not disruptions:
-            return
+    # --- trains ---------------------------------------------------------- #
+    def upsert_trains(self, routes: list[dict[str, Any]]) -> int:
+        rows = []
+        for r in routes:
+            schedule_id = r.get("scheduleId")
+            order_id = r.get("orderId")
+            if schedule_id is None or order_id is None:
+                continue
+            rows.append(
+                (
+                    int(schedule_id),
+                    int(order_id),
+                    r.get("nationalNumber"),            # number  e.g. "99216"
+                    None,                                # name (service name) — not in /schedules
+                    r.get("commercialCategorySymbol"),   # type    e.g. "S1", "R7"
+                    r.get("carrierCode"),                # carrier "KM", "SKM", ...
+                )
+            )
+        if not rows:
+            return 0
         with self._pg.cursor() as cur:
             psycopg2.extras.execute_batch(
                 cur,
                 """
-                INSERT INTO disruptions (id, payload, updated_at)
-                VALUES (%s, %s, now())
-                ON CONFLICT (id)
-                DO UPDATE SET payload = EXCLUDED.payload, updated_at = now();
+                INSERT INTO trains
+                    (schedule_id, order_id, number, name, type, carrier_code)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (schedule_id, order_id)
+                DO UPDATE SET number       = EXCLUDED.number,
+                              name         = EXCLUDED.name,
+                              type         = EXCLUDED.type,
+                              carrier_code = EXCLUDED.carrier_code,
+                              updated_at   = now();
                 """,
-                [(str(d.get("id")), json.dumps(d)) for d in disruptions],
+                rows,
             )
+        return len(rows)
 
-    def cache_operations(self, operations: list[dict[str, Any]], ttl_seconds: int) -> None:
-        """Cache each train's live operation under its own key, plus an index
-        of all currently-active train IDs, so the frontend/API layer can do
-        cheap lookups without scanning."""
+    # --- train_runs (hot path) ------------------------------------------ #
+    def upsert_train_runs(self, trains: list[dict[str, Any]]) -> int:
+        today = dt.date.today().isoformat()
+        rows = []
+        for t in trains:
+            schedule_id = t.get("scheduleId")
+            order_id = t.get("orderId")
+            if schedule_id is None or order_id is None:
+                continue
+            rows.append(
+                (
+                    int(schedule_id),
+                    int(order_id),
+                    t.get("operatingDate") or today,
+                    t.get("trainStatus"),
+                    json.dumps(t.get("stations") or []),  # whole route, verbatim
+                )
+            )
+        if not rows:
+            return 0
+        with self._pg.cursor() as cur:
+            psycopg2.extras.execute_batch(
+                cur,
+                """
+                INSERT INTO train_runs
+                    (schedule_id, order_id, operating_date, train_status, stops)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (schedule_id, order_id, operating_date)
+                DO UPDATE SET train_status = EXCLUDED.train_status,
+                              stops        = EXCLUDED.stops,
+                              updated_at   = now();
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def prune_old_runs(self) -> int:
+        with self._pg.cursor() as cur:
+            cur.execute("DELETE FROM train_runs WHERE operating_date < CURRENT_DATE;")
+            return cur.rowcount
+
+    # --- Redis hot cache ------------------------------------------------- #
+    def cache_operations(self, trains: list[dict[str, Any]], ttl_seconds: int) -> None:
         pipe = self._redis.pipeline()
-        train_ids: list[str] = []
-        for op in operations:
-            train_id = str(op.get("trainId") or op.get("id"))
-            train_ids.append(train_id)
-            pipe.set(f"operation:{train_id}", json.dumps(op), ex=ttl_seconds)
-        pipe.set("operations:index", json.dumps(train_ids), ex=ttl_seconds)
+        keys: list[str] = []
+        for t in trains:
+            schedule_id = t.get("scheduleId")
+            order_id = t.get("orderId")
+            if schedule_id is None or order_id is None:
+                continue
+            run_key = f"{schedule_id}:{order_id}"
+            keys.append(run_key)
+            pipe.set(f"operation:{run_key}", json.dumps(t), ex=ttl_seconds)
+        pipe.set("operations:index", json.dumps(keys), ex=ttl_seconds)
         pipe.execute()
 
     def close(self) -> None:
@@ -190,26 +297,44 @@ class Storage:
         self._redis.close()
 
 
-def sync_once(client: PkpApiClient, storage: Storage, config: Config) -> None:
-    operations = client.get_operations()
-    op_list = operations if isinstance(operations, list) else operations.get("items", [])
-    storage.cache_operations(op_list, ttl_seconds=config.poll_interval_seconds * 3)
-    log.info("Cached %d live operation(s) in Redis", len(op_list))
+# --------------------------------------------------------------------------- #
+# Sync steps
+# --------------------------------------------------------------------------- #
+def sync_live(
+    client: PkpApiClient,
+    storage: Storage,
+    config: Config,
+    known_station_ids: set[int],
+) -> None:
+    """Hot path — runs every poll interval."""
+    trains, stations = client.get_operations()
 
-    disruptions = client.get_disruptions()
-    disruption_list = (
-        disruptions if isinstance(disruptions, list) else disruptions.get("items", [])
-    )
-    storage.upsert_disruptions(disruption_list)
-    log.info("Upserted %d disruption(s) in Postgres", len(disruption_list))
+    # Seed station names, but only for ids we haven't written this process-run,
+    # so we don't re-upsert the whole catalogue every 30s.
+    new_stations = {sid: name for sid, name in stations.items() if int(sid) not in known_station_ids}
+    if new_stations:
+        n_new = storage.upsert_stations(new_stations)
+        known_station_ids.update(int(sid) for sid in new_stations)
+        log.info("Live: seeded %d new station name(s)", n_new)
 
-    # NOTE: schedules/routes change far less often than operations. Fetching
-    # every route on every poll would be wasteful; a real implementation
-    # should compare `client.get_data_version()` against the last-seen value
-    # and only refresh routes when it changes. Left as a TODO since the exact
-    # shape of the data-version response isn't pinned down yet.
+    n_runs = storage.upsert_train_runs(trains)
+    storage.cache_operations(trains, ttl_seconds=config.poll_interval_seconds * 3)
+    log.info("Live: %d train(s) -> train_runs + Redis", n_runs)
 
 
+def sync_daily(client: PkpApiClient, storage: Storage) -> None:
+    """Cold path — runs once per calendar day."""
+    routes = client.get_schedule_routes()
+    n_trains = storage.upsert_trains(routes)
+    log.info("Daily: upserted %d train identity row(s)", n_trains)
+
+    n_pruned = storage.prune_old_runs()
+    log.info("Daily: pruned %d stale train_run(s)", n_pruned)
+
+
+# --------------------------------------------------------------------------- #
+# Main loop
+# --------------------------------------------------------------------------- #
 def main() -> int:
     config = Config.from_env()
     client = PkpApiClient(config)
@@ -231,11 +356,27 @@ def main() -> int:
         config.pkp_api_base_url,
     )
 
+    last_daily: dt.date | None = None
+    known_station_ids: set[int] = set()
+
     try:
         while running:
             cycle_start = time.monotonic()
+
+            # Run the daily job once when the calendar date rolls over (and on
+            # first boot). Failures are logged but don't stop the live loop.
+            today = dt.date.today()
+            if last_daily != today:
+                try:
+                    sync_daily(client, storage)
+                    last_daily = today
+                except requests.RequestException as exc:
+                    log.error("Daily sync — PKP API request failed: %s", exc)
+                except psycopg2.Error as exc:
+                    log.error("Daily sync — Postgres error: %s", exc)
+
             try:
-                sync_once(client, storage, config)
+                sync_live(client, storage, config, known_station_ids)
             except requests.RequestException as exc:
                 log.error("PKP API request failed: %s", exc)
             except psycopg2.Error as exc:
@@ -244,8 +385,7 @@ def main() -> int:
                 log.error("Redis error: %s", exc)
 
             elapsed = time.monotonic() - cycle_start
-            sleep_for = max(config.poll_interval_seconds - elapsed, 0)
-            time.sleep(sleep_for)
+            time.sleep(max(config.poll_interval_seconds - elapsed, 0))
     finally:
         storage.close()
 

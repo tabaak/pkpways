@@ -24,7 +24,10 @@ api-key-pkp.txt
 # root .env holds docker-compose datastore passwords
 /.env
 .env
-test.py
+operations.py
+schedules.py
+schedules.json
+operations.json
 
 # --- misc / editor / OS ---
 .DS_Store

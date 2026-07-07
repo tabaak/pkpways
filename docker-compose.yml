@@ -31,7 +31,9 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      # PG 18+ images store data in a version-specific subdir, so mount the
+      # PARENT (/var/lib/postgresql), not /var/lib/postgresql/data.
+      - pg_data:/var/lib/postgresql
       # schema.sql runs automatically ON FIRST INIT ONLY (empty data dir).
       # Re-applying later: docker compose exec -T postgres \
       #   psql -U pkpways -d pkpways < schema.sql
@@ -61,6 +63,26 @@ services:
       retries: 5
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # data-sync worker — polls the PKP API into Postgres + Redis.
+  # Talks to the datastores over the internal compose network, so the hosts
+  # are the service names "postgres" / "redis" (NOT localhost).
+  data-sync:
+    build: ./data-sync
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PKP_API_KEY: ${PKP_API_KEY:?set PKP_API_KEY in .env}
+      PKP_API_BASE_URL: ${PKP_API_BASE_URL:-https://pdp-api.plk-sa.pl/api/v1}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pkpways}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pkpways}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-10}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 volumes:
   pg_data:
