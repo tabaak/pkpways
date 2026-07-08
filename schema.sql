@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS stations (
     name                TEXT NOT NULL,
     latitude            NUMERIC(9, 6),
     longitude           NUMERIC(9, 6),
-    geocode_source      TEXT CHECK (geocode_source IN ('nominatim', 'manual')),
+    geocode_source      TEXT CHECK (geocode_source IN ('overpass', 'nominatim', 'manual')),
     geocode_confidence  TEXT CHECK (geocode_confidence IN ('high', 'low', 'unmatched')),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
