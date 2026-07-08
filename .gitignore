@@ -28,6 +28,7 @@ operations.py
 schedules.py
 schedules.json
 operations.json
+usage.py
 
 # --- misc / editor / OS ---
 .DS_Store

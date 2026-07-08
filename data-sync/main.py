@@ -36,6 +36,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import psycopg2
@@ -111,11 +112,54 @@ class PkpApiClient:
             {"X-API-Key": config.pkp_api_key, "Accept": "application/json"}
         )
 
+    # Max times to retry a single request when the API returns 429.
+    _MAX_RETRIES = 5
+    # Never sleep longer than this on a single backoff, even if asked to.
+    _MAX_BACKOFF_SECONDS = 120
+    # Polite gap between paginated page requests, so one cycle (which can be
+    # several pages of the national fleet) doesn't burst and trip a 429.
+    _INTER_PAGE_DELAY_SECONDS = 1.0
+
+    @classmethod
+    def _retry_after_seconds(cls, response: requests.Response, attempt: int) -> int:
+        """How long to wait before retrying a throttled request.
+
+        Prefers the server's `Retry-After` header (seconds or HTTP-date), else
+        falls back to exponential backoff (5, 10, 20, ...), capped.
+        """
+        header = response.headers.get("Retry-After")
+        if header:
+            try:
+                return max(1, min(int(header), cls._MAX_BACKOFF_SECONDS))
+            except ValueError:
+                try:
+                    when = parsedate_to_datetime(header)
+                    delta = (when - dt.datetime.now(dt.timezone.utc)).total_seconds()
+                    return max(1, min(int(delta), cls._MAX_BACKOFF_SECONDS))
+                except (TypeError, ValueError):
+                    pass
+        return min(5 * (2 ** (attempt - 1)), cls._MAX_BACKOFF_SECONDS)
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self._config.pkp_api_base_url}{path}"
-        response = self._session.get(
-            url, params=params, timeout=self._config.request_timeout_seconds
-        )
+        response: requests.Response | None = None
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            response = self._session.get(
+                url, params=params, timeout=self._config.request_timeout_seconds
+            )
+            if response.status_code == 429:
+                backoff = self._retry_after_seconds(response, attempt)
+                log.warning(
+                    "PKP API 429 Too Many Requests on %s (attempt %d/%d) — "
+                    "backing off %ds",
+                    path, attempt, self._MAX_RETRIES, backoff,
+                )
+                time.sleep(backoff)
+                continue
+            response.raise_for_status()
+            return response.json()
+        # Retries exhausted — raise the last 429 for the caller to log/skip.
+        assert response is not None
         response.raise_for_status()
         return response.json()
 
@@ -144,6 +188,7 @@ class PkpApiClient:
             if not pagination.get("hasNextPage"):
                 break
             page += 1
+            time.sleep(self._INTER_PAGE_DELAY_SECONDS)
         return trains, stations
 
     def get_schedule_routes(self, page_size: int = 10000) -> list[dict[str, Any]]:
@@ -160,6 +205,7 @@ class PkpApiClient:
             if not pagination.get("hasNextPage"):
                 break
             page += 1
+            time.sleep(self._INTER_PAGE_DELAY_SECONDS)
         return routes
 
 
