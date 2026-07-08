@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS trains (
     number        VARCHAR(30),      -- e.g. "IC 3512"  (confirm field name in /schedules)
     name          VARCHAR(200),     -- optional service name, e.g. "Mazowsze"
     type          VARCHAR(30),      -- e.g. "IC", "REG"
-    carrier_code  VARCHAR(10),      -- "IC","KM",... drives marker color + carrier filter
+    carrier_code  TEXT,             -- "KM","SKM","PKP INTERCITY",... drives marker color + carrier filter
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (schedule_id, order_id)
 );

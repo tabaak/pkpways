@@ -171,7 +171,16 @@ class Storage:
         self._config = config
         self._pg = psycopg2.connect(config.database_url)
         self._pg.autocommit = True
-        self._redis = redis.Redis.from_url(config.redis_url, decode_responses=True)
+        # Generous socket timeouts: a full national /operations cache is a large
+        # write, and the default (no timeout / short) either hangs or trips
+        # "Timeout writing to socket" under load.
+        self._redis = redis.Redis.from_url(
+            config.redis_url,
+            decode_responses=True,
+            socket_timeout=30,
+            socket_connect_timeout=10,
+            health_check_interval=30,
+        )
 
     # --- stations -------------------------------------------------------- #
     def upsert_stations(self, stations: dict[str, str]) -> int:
@@ -195,6 +204,7 @@ class Storage:
                 DO UPDATE SET name = EXCLUDED.name, updated_at = now();
                 """,
                 rows,
+                page_size=1000,
             )
         return len(rows)
 
@@ -233,6 +243,7 @@ class Storage:
                               updated_at   = now();
                 """,
                 rows,
+                page_size=1000,
             )
         return len(rows)
 
@@ -269,6 +280,7 @@ class Storage:
                               updated_at   = now();
                 """,
                 rows,
+                page_size=1000,
             )
         return len(rows)
 
@@ -278,9 +290,12 @@ class Storage:
             return cur.rowcount
 
     # --- Redis hot cache ------------------------------------------------- #
-    def cache_operations(self, trains: list[dict[str, Any]], ttl_seconds: int) -> None:
-        pipe = self._redis.pipeline()
+    def cache_operations(
+        self, trains: list[dict[str, Any]], ttl_seconds: int, chunk: int = 1000
+    ) -> None:
         keys: list[str] = []
+        pipe = self._redis.pipeline()
+        pending = 0
         for t in trains:
             schedule_id = t.get("scheduleId")
             order_id = t.get("orderId")
@@ -289,6 +304,13 @@ class Storage:
             run_key = f"{schedule_id}:{order_id}"
             keys.append(run_key)
             pipe.set(f"operation:{run_key}", json.dumps(t), ex=ttl_seconds)
+            pending += 1
+            # Flush in chunks so we never buffer the whole national fleet into
+            # one round trip (which overflows the socket write timeout).
+            if pending >= chunk:
+                pipe.execute()
+                pipe = self._redis.pipeline()
+                pending = 0
         pipe.set("operations:index", json.dumps(keys), ex=ttl_seconds)
         pipe.execute()
 
