@@ -1,10 +1,9 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp } from '@/app/providers'
-import { tickTrains } from '@/lib/geo'
-import { TRAINS } from '@/lib/trains'
+import type { TrainLive } from '@/lib/types'
 import { TopBar } from './TopBar'
 import { TrainDetailsPanel } from './TrainDetailsPanel'
 import { TrainGlyph } from './icons'
@@ -28,35 +27,46 @@ function MapLoading() {
   )
 }
 
-/** Drives the animation clock at ~15fps so live markers glide smoothly.
- *  No-ops when there's nothing to animate. */
-function useAnimationClock(active: boolean) {
-  const [elapsed, setElapsed] = useState(0)
+// How often to refresh live positions. The worker itself polls PKP on a similar
+// cadence, so faster than this just re-fetches identical data.
+const POLL_INTERVAL_MS = 15_000
+
+/** Fetches live trains from the API on an interval. */
+function useLiveTrains() {
+  const [trains, setTrains] = useState<TrainLive[]>([])
+
   useEffect(() => {
-    if (!active) return
-    let raf = 0
-    const start = performance.now()
-    let last = 0
-    const loop = (t: number) => {
-      const e = t - start
-      if (e - last >= 66) {
-        last = e
-        setElapsed(e)
+    let cancelled = false
+    const controller = new AbortController()
+
+    async function load() {
+      try {
+        const res = await fetch('/api/trains', { signal: controller.signal })
+        if (!res.ok) return
+        const data = (await res.json()) as { trains: TrainLive[] }
+        if (!cancelled) setTrains(data.trains)
+      } catch {
+        /* transient fetch/abort error — keep the last good set */
       }
-      raf = requestAnimationFrame(loop)
     }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [active])
-  return elapsed
+
+    load()
+    const id = setInterval(load, POLL_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(id)
+    }
+  }, [])
+
+  return trains
 }
 
 export function AppShell() {
   const { theme, t } = useApp()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const elapsed = useAnimationClock(TRAINS.length > 0)
-  const trains = useMemo(() => tickTrains(TRAINS, elapsed), [elapsed])
+  const trains = useLiveTrains()
   const selected = trains.find((tr) => tr.id === selectedId) ?? null
 
   return (

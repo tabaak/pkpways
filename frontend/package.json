@@ -9,13 +9,16 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "ioredis": "^5.4.1",
     "leaflet": "^1.9.4",
     "next": "16.2.10",
+    "pg": "^8.13.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-leaflet": "^5.0.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
     "@tailwindcss/postcss": "^4",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^20",

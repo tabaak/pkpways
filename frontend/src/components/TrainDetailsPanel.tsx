@@ -2,7 +2,6 @@
 
 import { useApp } from '@/app/providers'
 import { getCarrier } from '@/lib/carriers'
-import { getStation } from '@/lib/stations'
 import type { TrainLive } from '@/lib/types'
 import { CloseIcon, TrainGlyph } from './icons'
 
@@ -37,8 +36,8 @@ export function TrainDetailsPanel({
   const { t } = useApp()
   const carrier = getCarrier(train.carrierId)
 
-  const from = getStation(train.stops[train.fromIndex].stationId)
-  const to = getStation(train.stops[train.toIndex].stationId)
+  const from = train.stops[train.fromIndex]
+  const to = train.stops[train.toIndex]
 
   return (
     <aside
@@ -113,7 +112,6 @@ export function TrainDetailsPanel({
 
       <ol className="thin-scroll mt-2 flex-1 overflow-y-auto px-4 pb-4">
         {train.stops.map((stop, i) => {
-          const station = getStation(stop.stationId)
           const passed = i <= train.fromIndex
           const isOrigin = i === 0
           const isDest = i === train.stops.length - 1
@@ -165,7 +163,7 @@ export function TrainDetailsPanel({
               <div className="flex flex-1 items-start justify-between gap-3 py-1.5">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-slate-800 dark:text-slate-100">
-                    {station.name}
+                    {stop.name}
                   </p>
                   {isOrigin && (
                     <p className="text-[11px] text-slate-400 dark:text-slate-500">

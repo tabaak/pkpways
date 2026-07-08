@@ -1,6 +1,7 @@
-// Domain types for the PkpWays UI. This is a UI-only build, so these describe
-// the shape of the *mock* data — they intentionally mirror what the real
-// PKP PLK API + interpolation layer would eventually provide.
+// Domain types for the PkpWays UI. These are produced server-side by the read
+// layer (src/lib/server/datastore.ts), which joins the live /operations payload
+// in Redis with station coordinates + train identity in Postgres, then computes
+// each train's current position. The client consumes the finished TrainLive[].
 
 export type LatLng = {
   lat: number
@@ -21,6 +22,8 @@ export type CarrierId =
   | 'SKM'
   | 'KD'
   | 'KS'
+  /** Any carrier we don't brand explicitly (rendered neutral grey). */
+  | 'OTHER'
 
 export type Carrier = {
   id: CarrierId
@@ -32,33 +35,32 @@ export type Carrier = {
   color: string
 }
 
-/** A single scheduled stop on a train's route. */
+/** A single scheduled stop on a train's route, with its station resolved.
+ *  Coordinates are embedded so the client never needs a station lookup table. */
 export type RouteStop = {
   stationId: string
-  /** Planned arrival "HH:MM" (null for the origin). */
+  /** Station display name, e.g. "Warszawa Centralna". */
+  name: string
+  lat: number
+  lng: number
+  /** Arrival "HH:MM" (null for the origin). */
   arrival: string | null
-  /** Planned departure "HH:MM" (null for the final stop). */
+  /** Departure "HH:MM" (null for the final stop). */
   departure: string | null
-  /** Real-time delay in minutes (0 = on time). */
+  /** Real-time delay in minutes at this stop (0 = on time). */
   delay: number
 }
 
 export type Train = {
+  /** Stable id, "scheduleId:orderId". */
   id: string
   /** e.g. "IC 3512". */
   number: string
   /** Optional service name, e.g. "Mazowsze". */
   name?: string
   carrierId: CarrierId
-  /** Ordered list of stops (>= 2). */
+  /** Ordered list of located stops (>= 2). */
   stops: RouteStop[]
-  /**
-   * Animation phase 0..1 — where on its route the train currently sits.
-   * Used by the mock animation loop to glide markers between stations.
-   */
-  phase: number
-  /** Full route length in "phase units per ms" — controls apparent speed. */
-  speed: number
 }
 
 /** A live snapshot of a train, computed for a given clock tick. */
