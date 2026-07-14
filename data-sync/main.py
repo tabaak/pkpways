@@ -38,6 +38,7 @@ import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
@@ -46,6 +47,11 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# The API's `operatingDate` (and its naive timestamps) are Europe/Warsaw, which
+# is not the container's clock (UTC) — they disagree about the date for the ~2h
+# either side of midnight.
+WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -65,6 +71,7 @@ class Config:
     redis_url: str
     poll_interval_seconds: int
     request_timeout_seconds: int
+    cache_ttl_seconds: int
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -96,6 +103,13 @@ class Config:
             redis_url=redis_url,  # type: ignore[arg-type]
             poll_interval_seconds=int(os.environ.get("POLL_INTERVAL_SECONDS", "30")),
             request_timeout_seconds=int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10")),
+            # Must comfortably outlive a full poll cycle, which takes minutes:
+            # ~40 paginated pages with an inter-page delay, plus any 429 backoff.
+            # If keys expire mid-cycle the cache is empty (or half-written) for
+            # most of every cycle. Stale entries are harmless — each one carries
+            # its full route, and the read layer drops trains past their last
+            # arrival — so the TTL only needs to evict trains the API forgot.
+            cache_ttl_seconds=int(os.environ.get("CACHE_TTL_SECONDS", "1800")),
         )
 
 
@@ -338,16 +352,40 @@ class Storage:
     # --- Redis hot cache ------------------------------------------------- #
     def cache_operations(
         self, trains: list[dict[str, Any]], ttl_seconds: int, chunk: int = 1000
-    ) -> None:
+    ) -> int:
+        """Cache only runs that could plausibly be moving right now.
+
+        /operations returns a rolling ~7-day window (~40k trains), but a live
+        map only cares about runs in flight. Caching the whole window cost
+        ~313MB and — because the map's read layer has to deserialise every key
+        to discover a run is long finished — made a full read take ~100s.
+
+        The cache key MUST include operating_date: (scheduleId, orderId) is not
+        unique across dates (it's only a PK in `train_runs` together with
+        operating_date). Without it ~55% of runs silently overwrote each other,
+        and the surviving record for a given key was an arbitrary date.
+        """
+        today = dt.datetime.now(WARSAW_TZ).date()
+        # Yesterday covers overnight runs still in flight past midnight;
+        # tomorrow covers runs that depart just after it.
+        wanted = {
+            (today - dt.timedelta(days=1)).isoformat(),
+            today.isoformat(),
+            (today + dt.timedelta(days=1)).isoformat(),
+        }
+
         keys: list[str] = []
         pipe = self._redis.pipeline()
         pending = 0
         for t in trains:
             schedule_id = t.get("scheduleId")
             order_id = t.get("orderId")
-            if schedule_id is None or order_id is None:
+            operating_date = t.get("operatingDate")
+            if schedule_id is None or order_id is None or operating_date is None:
                 continue
-            run_key = f"{schedule_id}:{order_id}"
+            if str(operating_date)[:10] not in wanted:
+                continue
+            run_key = f"{schedule_id}:{order_id}:{str(operating_date)[:10]}"
             keys.append(run_key)
             pipe.set(f"operation:{run_key}", json.dumps(t), ex=ttl_seconds)
             pending += 1
@@ -359,6 +397,7 @@ class Storage:
                 pending = 0
         pipe.set("operations:index", json.dumps(keys), ex=ttl_seconds)
         pipe.execute()
+        return len(keys)
 
     def close(self) -> None:
         self._pg.close()
@@ -375,7 +414,9 @@ def sync_live(
     known_station_ids: set[int],
 ) -> None:
     """Hot path — runs every poll interval."""
+    started = time.monotonic()
     trains, stations = client.get_operations()
+    fetch_seconds = time.monotonic() - started
 
     # Seed station names, but only for ids we haven't written this process-run,
     # so we don't re-upsert the whole catalogue every 30s.
@@ -386,8 +427,16 @@ def sync_live(
         log.info("Live: seeded %d new station name(s)", n_new)
 
     n_runs = storage.upsert_train_runs(trains)
-    storage.cache_operations(trains, ttl_seconds=config.poll_interval_seconds * 3)
-    log.info("Live: %d train(s) -> train_runs + Redis", n_runs)
+    n_cached = storage.cache_operations(trains, ttl_seconds=config.cache_ttl_seconds)
+    log.info(
+        "Live: %d train(s) -> train_runs, %d -> Redis (ttl %ds) "
+        "[fetch %.0fs, cycle %.0fs]",
+        n_runs,
+        n_cached,
+        config.cache_ttl_seconds,
+        fetch_seconds,
+        time.monotonic() - started,
+    )
 
 
 def sync_daily(client: PkpApiClient, storage: Storage) -> None:

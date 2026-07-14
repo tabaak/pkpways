@@ -31,8 +31,8 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 | `data-sync` worker | ✅ Live — polling the real PKP API into Postgres + Redis |
 | Postgres 18 + Redis | ✅ Live — running via Docker Compose on the VPS |
 | Database schema | ✅ Applied (`stations`, `trains`, `train_runs`) |
-| Station geocoding (lat/lng) | ⏳ TODO — coordinates are still `NULL` (see [Station Coordinates](#-station-coordinates--geocoding)) |
-| `frontend/` map UI | 🚧 Scaffolded — not yet reading from the datastores |
+| Station geocoding (lat/lng) | ✅ Done — **2,953 / 2,964** stations have coordinates (see [Station Coordinates](#-station-coordinates--geocoding)) |
+| `frontend/` map UI | ✅ Wired — reads live data via `GET /api/trains` (see [Frontend](#-frontend-nextjs)) |
 
 ---
 
@@ -47,8 +47,9 @@ pkpways/
 ├── .env.example         # Template for the single root .env (passwords + API key)
 ├── frontend/            # Next.js 16 app (the map UI) — reads Redis/Postgres, never the PKP API
 └── data-sync/           # Python worker: the ONLY thing that calls the PKP PLK API
-    ├── main.py          # Poll loop + Postgres/Redis writers
-    ├── Dockerfile       # Built as the compose `data-sync` service
+    ├── main.py               # Poll loop + Postgres/Redis writers
+    ├── geocode_stations.py   # One-off: backfills stations.latitude/longitude
+    ├── Dockerfile            # Built as the compose `data-sync` service
     └── requirements.txt
 ```
 
@@ -90,18 +91,24 @@ Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (wa
 
 **How the worker runs (`data-sync/main.py`):**
 
-- **Live loop (every `POLL_INTERVAL_SECONDS`, default 30s):** `GET /operations?fullRoutes=true&withPlanned=true` for **all national trains** → upserts each into `train_runs` (whole route as JSONB) and mirrors each into Redis.
+- **Live loop (every `POLL_INTERVAL_SECONDS`, default 30s):** `GET /operations?fullRoutes=true&withPlanned=true` for **all national trains** → upserts every run into `train_runs` (whole route as JSONB), and mirrors the **currently-relevant** ones (yesterday/today/tomorrow) into Redis — see [Redis cache layout](#redis-cache-layout).
 - **Daily job (on calendar-date rollover / first boot):** `GET /schedules` → upserts train identity into `trains`; then prunes `train_runs` rows before today.
 - **Station names** are seeded from the `stations` id→name map **embedded in the `/operations` response** (only newly-seen ids each cycle), so no separate dictionary endpoint is needed.
 
-> ⚠️ **Cycle time is data-bound.** The `/operations` full-route payload covers the entire national fleet (~40k trains), so one cycle takes a couple of minutes. `POLL_INTERVAL_SECONDS` is a **floor**, not a guarantee — if a cycle runs longer, the next starts immediately (zero sleep). If you need faster refresh later, filter by station/carrier (the API supports `carriersInclude` + station filters) or split the cadence.
+> ⚠️ **Cycle time is data-bound.** The `/operations` full-route payload covers the entire national fleet (~40k runs across a rolling week), so one cycle measures **~70–85s** (of which ~55–70s is the paginated fetch). `POLL_INTERVAL_SECONDS` is a **floor**, not a guarantee — if a cycle runs longer, the next starts immediately (zero sleep). If you need faster refresh later, filter by station/carrier (the API supports `carriersInclude` + station filters) or split the cadence.
 
 ### Redis cache layout
 
 | Key | Value | TTL |
 |-----|-------|-----|
-| `operation:<scheduleId>:<orderId>` | one train's full `/operations` object (JSON) | `POLL_INTERVAL_SECONDS × 3` |
-| `operations:index` | JSON array of all active `<scheduleId>:<orderId>` keys | `POLL_INTERVAL_SECONDS × 3` |
+| `operation:<scheduleId>:<orderId>:<operatingDate>` | one train's full `/operations` object (JSON) | `CACHE_TTL_SECONDS` (default 1800) |
+| `operations:index` | JSON array of all cached `<scheduleId>:<orderId>:<operatingDate>` keys | `CACHE_TTL_SECONDS` (default 1800) |
+
+> ⚠️ **The cache key MUST include `operatingDate`.** `(scheduleId, orderId)` looks unique but is not — it's only a primary key in `train_runs` *together with* `operating_date`, because `/operations` returns a rolling ~7-day window in which the same pair recurs on multiple dates. The key originally omitted the date, so **21,746 of 39,839 trains silently overwrote each other**, and the survivor for a given key was an arbitrary date (often days stale). The read layer then correctly rejected almost all of them as "past their last arrival" — the map rendered nothing while the worker logged perfect health.
+
+> ⚠️ **Only current runs are cached.** The worker keeps just `operatingDate ∈ {yesterday, today, tomorrow}` (Warsaw) — yesterday for overnight runs still in flight, tomorrow for ones departing just after midnight. Caching the full 7-day window meant ~40k keys / ~313 MB, and since the read layer must deserialise a record to discover the run is long finished, a full read took **~100 s** — far past the client's poll timeout, so the request never returned. Filtering to ~14.7k current runs also lets the `MAX_TRAINS` early-exit actually fire.
+
+> ⚠️ **The TTL must comfortably outlive a full poll cycle** — this is a trap worth understanding. It used to be `POLL_INTERVAL_SECONDS × 3` (= 90s), which was fine when the worker burst-paginated and finished in seconds. Once rate-limit handling added an inter-page delay, a cycle grew past 90s and **every batch of keys expired before its replacement was written** — Redis sat empty for most of each cycle and the map rendered nothing, while the worker looked perfectly healthy. The TTL is now independent of the poll interval and generous by default. Stale entries are harmless: each one carries its full route, and the read layer drops any train past its last arrival, so an old key self-filters rather than showing a ghost train. The TTL exists only to evict trains the API stops reporting.
 
 ---
 
@@ -110,14 +117,14 @@ Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (wa
 Defined in `schema.sql` (PostgreSQL 18), auto-applied on first DB init. Three tables, **live-only** (old runs pruned daily). All keyed by `(scheduleId, orderId)`.
 
 ### `stations` — coordinates cache
-The one thing the API never provides. Seeded id + name from `/operations`; `latitude`/`longitude` are geocoded separately (still TODO).
+The one thing the API never provides. Seeded id + name from `/operations`; `latitude`/`longitude` are backfilled by `geocode_stations.py`.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `pkp_id` | `INTEGER PK` | `stationId` from the API |
 | `name` | `TEXT` | station name |
-| `latitude`, `longitude` | `NUMERIC(9,6)` | **NULL until geocoded** |
-| `geocode_source` | `TEXT` | `'nominatim'` \| `'manual'` |
+| `latitude`, `longitude` | `NUMERIC(9,6)` | NULL only for the 11 unmatched stations |
+| `geocode_source` | `TEXT` | `'overpass'` \| `'nominatim'` \| `'manual'` |
 | `geocode_confidence` | `TEXT` | `'high'` \| `'low'` \| `'unmatched'` |
 
 ### `trains` — train identity
@@ -140,6 +147,8 @@ The `/operations` payload; the whole route stored verbatim. Upserted every poll.
 | `train_status` | `TEXT` | `trainStatus` (e.g. `"C"`) |
 | `stops` | `JSONB` | the train's whole `stations` array, verbatim |
 
+> **🔑 `(schedule_id, order_id)` is NOT unique** — `operating_date` is part of the PK for a reason. `/operations` returns a rolling ~7-day window, and the same `(scheduleId, orderId)` recurs across dates: one run per day. Any identifier you build from the pair alone (a cache key, a map key, a React key) **will collide** and silently keep an arbitrary date's run. This already cost us the Redis cache once — see [Redis cache layout](#redis-cache-layout).
+
 > **⏱️ Where delays live:** there is **no delay column**. Delays are per-stop **inside `train_runs.stops`** — each stop object has `arrivalDelayMinutes` / `departureDelayMinutes`. These keys are **absent when the delay is zero** (treat missing as `0`). A train's "current" delay = the delay at its most-recently-passed or next stop, determined by comparing `actual*`/`planned*` timestamps against now (Europe/Warsaw).
 
 Example — max delay per active run:
@@ -160,10 +169,19 @@ GROUP BY schedule_id, order_id;
 | **Base URL** | `https://pdp-api.plk-sa.pl/api/v1` |
 | **Auth** | `X-API-Key` header |
 | **Format** | JSON |
-| **Rate Limits** | Basic: 100/hr · Standard: 500/hr · Premium: 2,000/hr |
+| **Rate Limits** | Basic: 100/hr, 1k/day · Standard: 500/hr, 5k/day · Premium: 2,000/hr, 20k/day |
 | **Docs** | [Swagger](https://pdp-api.plk-sa.pl/swagger) · [Scalar](https://pdp-api.plk-sa.pl/scalar/v1) |
 
 > **Timestamps have no timezone** (e.g. `"2026-07-07T08:29:00"`). Treat them as **Europe/Warsaw** local time.
+
+### Rate limiting
+
+A full `/operations` sweep is ~40 pages, so **burst-paginating a cycle will trip `429 Too Many Requests`** — that's what exhausted the Basic tier (100/hr). The client now:
+
+- Sleeps **1s between pages**, so a cycle drips rather than bursts.
+- Retries `429`s with exponential backoff (max 5 attempts, capped at 120s), honouring `Retry-After` when present — as either a seconds count or an HTTP-date.
+
+Note the knock-on effect: this makes a cycle take **minutes**, which is exactly why the Redis TTL can't be derived from `POLL_INTERVAL_SECONDS`.
 
 ### Endpoints the worker uses
 
@@ -226,18 +244,30 @@ Pagination: both endpoints use `pagination.hasNextPage`; the worker requests `pa
 
 ## 🧮 Train Position Interpolation
 
-The core challenge: **the API gives station-level arrival/departure times and delays, not GPS coordinates.** To show trains "moving":
+The core challenge: **the API gives station-level arrival/departure times and delays, not GPS coordinates.** Positions are computed server-side in `frontend/src/lib/server/datastore.ts` (`toLive()`):
 
-1. Read the run's stops from `train_runs.stops` (planned + actual times).
-2. Determine which two stations the train is currently between (compare times against now, Europe/Warsaw).
-3. Compute a progress ratio and linearly interpolate lat/lng between those two stations' coordinates.
-4. Animate the marker smoothly between polling updates.
+1. Take the train's stops from its cached `/operations` object, keeping only stops whose station has coordinates (a train needs ≥2 to be placeable).
+2. Compute each stop's **effective** times: `actual ?? planned + delayMinutes`.
+3. Find the segment where *now* falls between one stop's effective departure and the next stop's effective arrival. A train before its first departure or past its last arrival returns `null` — so **only en-route trains are rendered**.
+4. Linearly interpolate lat/lng across that segment, and derive a bearing so the marker points the right way.
 
-This depends on `stations.latitude/longitude`, which is why geocoding is a prerequisite for the moving-marker feature.
+**Timezone handling:** API timestamps are naive (no offset) and mean Europe/Warsaw. Rather than convert, both the stop times and "now" are compared in the same **pseudo-UTC frame** — the wall-clock digits are read as if they were UTC, and `warsawNowMs()` derives the current time the same way. Two wrongs cancel; the comparison is correct and DST-safe.
 
 ### 📍 Station Coordinates — Geocoding
 
-The API never returns coordinates. `stations` rows are seeded with id + name only; `latitude`/`longitude` stay `NULL` until a one-time geocoding pass (planned: Nominatim, with `geocode_source`/`geocode_confidence` recorded, supplemented by [OpenRailwayMap](https://www.openrailwaymap.org/) where needed). **This is the main outstanding task before the map can render moving trains.**
+The API never returns coordinates, so `data-sync/geocode_stations.py` backfills them in a one-off pass. **Result: 2,953 of 2,964 stations located.**
+
+It is **Overpass-primary, Nominatim-fallback**, and deliberately works in bulk rather than per-station:
+
+- **One** Overpass query fetches every `railway=station|halt|stop` node/way in Poland, then PKP names are matched against that set **locally** — exact match, then diacritic-folded (`ł`→`l`, NFKD), then fuzzy (`difflib`, 0.88 cutoff). Querying Overpass once per station would be ~3,000 requests (throttling/ban risk), and Overpass's `["name"="X"]` is an *exact* string match, so it would actually be **more** brittle than matching locally.
+- Anything still unmatched optionally falls back to Nominatim (rate-limited to 1 req/1.1s).
+- Each row records `geocode_source` and `geocode_confidence` (`high` for an unambiguous exact/folded hit, `low` for fuzzy/ambiguous, `unmatched` for the leftovers).
+
+The pass is **resumable** — it only selects rows `WHERE geocode_source IS NULL`, so it can be re-run safely.
+
+```bash
+docker compose exec data-sync python geocode_stations.py
+```
 
 ---
 
@@ -258,10 +288,16 @@ docker compose logs -f data-sync
 
 Healthy worker logs look like:
 ```
-Daily: upserted N train identity row(s)
-Live: seeded N new station name(s)
-Live: N train(s) -> train_runs + Redis
+Daily: upserted 7252 train identity row(s)
+Daily: pruned 32450 stale train_run(s)
+Live: seeded 2965 new station name(s)
+Live: 39834 train(s) -> train_runs, 14715 -> Redis (ttl 1800s) [fetch 68s, cycle 83s]
 ```
+
+Two numbers to watch on that last line:
+
+- **`-> Redis` is much smaller than `-> train_runs`** — and should be. Postgres keeps every run in the API's rolling week; Redis keeps only the currently-relevant ones. If the two are equal, the operating-date filter isn't running.
+- **`cycle`** must stay well under `CACHE_TTL_SECONDS`. If it approaches it, keys start expiring before their replacements are written and the map blanks out.
 
 Verify data landed:
 ```bash
@@ -282,7 +318,10 @@ docker compose exec postgres psql -U pkpways -d pkpways -c \
 | `PKP_API_KEY` | data-sync | **The only secret the worker strictly needs** |
 | `PKP_API_BASE_URL` | data-sync | defaults to `https://pdp-api.plk-sa.pl/api/v1` |
 | `POLL_INTERVAL_SECONDS` | data-sync | default `30` (a floor — see [Data Flow](#data-flow)) |
+| `CACHE_TTL_SECONDS` | data-sync | default `1800` — Redis key TTL. **Must outlive a full poll cycle** (see [Redis cache layout](#redis-cache-layout)) |
 | `REQUEST_TIMEOUT_SECONDS`, `LOG_LEVEL` | data-sync | optional |
+| `DATABASE_URL`, `REDIS_URL` | frontend | in `frontend/.env.local` for local dev (via SSH tunnel) |
+| `MAX_TRAINS` | frontend | default `1500` — cap on markers sent to the browser |
 
 > **Running the worker standalone (without Docker)** is also supported: it reads `data-sync/.env` and needs `DATABASE_URL` + `REDIS_URL` pointing at `localhost`. In the Compose setup this file is unused — the root `.env` is the single source of truth.
 
@@ -295,13 +334,46 @@ docker compose exec postgres psql -U pkpways -d pkpways -c \
 
 ## 🖥️ Frontend (Next.js)
 
+The app reads live data from Redis/Postgres (never the PKP API directly).
+
+### Read layer
+
+`src/lib/server/datastore.ts` (`import 'server-only'`) is the only thing that touches the datastores:
+
+- Reads `operations:index` from Redis, then batched `MGET`s the `operation:*` keys (2,000 at a time).
+- Joins Postgres `stations` (coordinates) and `trains` (number, carrier), both cached 60s.
+- Computes each train's live position (see [Interpolation](#-train-position-interpolation)) and memoizes the result for 8s.
+- Caps output at **`MAX_TRAINS`** (default 1500) — the full ~40k fleet can't be rendered on Leaflet.
+
+`pg.Pool` and `ioredis` clients are singletons pinned to `globalThis` so hot-reload doesn't leak connections.
+
+Stops ship with their `name`/`lat`/`lng` embedded, so the **browser needs no station table at all**.
+
+### API
+
+`GET /api/trains` → `{ trains, count, at }` (`runtime = 'nodejs'`, `force-dynamic`, `Cache-Control: no-store`). `AppShell` polls it every 15s.
+
+### Running it locally
+
+The VPS datastores are bound to `127.0.0.1`, so local dev needs an SSH tunnel:
+
+```bash
+ssh -N \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+  -L 5432:localhost:5432 -L 6379:localhost:6379 \
+  ubuntu@main-vps
+```
+
 ```bash
 cd frontend
 npm install
+cp .env.local.example .env.local   # fill in DATABASE_URL / REDIS_URL (passwords from root .env)
 npm run dev
 ```
 
-The app reads live data from Redis/Postgres (never the PKP API directly). It is currently scaffolded; wiring it to the datastores is upcoming work.
+> ⚠️ Use **`127.0.0.1`**, not `localhost`, in `.env.local`. `ssh -L` binds IPv4 only, while Node resolves `localhost` to `::1` (IPv6) — which produces a confusing `ioredis AggregateError` / `ECONNREFUSED`.
+
+**Troubleshooting an empty map:** if `/api/trains` returns `count: 0` with no error, the read path is fine and the cache is empty. Check `DBSIZE` on Redis — see the TTL warning under [Redis cache layout](#redis-cache-layout).
 
 ### Design Philosophy
 
@@ -312,6 +384,19 @@ This is a **portfolio piece** — the design should be stunning:
 - **Smooth animations** for train markers gliding between positions
 - **Color-coded trains** by carrier (PKP IC = blue, Polregio = red, etc.)
 - **Dark mode map** with custom tile styling
+
+---
+
+## ⚠️ Known Limitations
+
+Open items, roughly by how much they'd bite:
+
+- **Timezone drift in the daily job.** `prune_old_runs()` uses Postgres `CURRENT_DATE` and the rollover check uses `dt.date.today()` — both **UTC**, while the API's dates are **Europe/Warsaw**. For the ~2h a day between Warsaw midnight and UTC midnight they disagree, so the daily job can prune/roll over against the wrong date. The Redis cache path is already Warsaw-correct (`WARSAW_TZ`); these two call sites are not.
+- **The frontend train `id` is `scheduleId:orderId`** — which, per the [schema note](#train_runs--live-runs-hot-path), is not unique across operating dates. Two runs of the same train (e.g. an overnight service and its next-day counterpart, both in flight) would collide on the same React key. The Redis key is now date-qualified; this one isn't yet.
+- **Cached records are fat (~8.1 KB each).** Each keeps `plannedSequenceNumber`, `actualSequenceNumber`, `isConfirmed` and other fields the map never reads. Slimming the cached shape would cut memory and read time several-fold.
+- **No sub-poll animation.** Markers jump on each 15s poll rather than gliding — position is recomputed per fetch, not tweened between them.
+- **No viewport culling or clustering.** The map relies on the blunt `MAX_TRAINS` cap (default 1500) rather than rendering what's actually in view.
+- **The full route ships with every marker.** Only the *selected* train needs its route; splitting that into `/api/trains/[id]` would shrink the payload substantially.
 
 ---
 
