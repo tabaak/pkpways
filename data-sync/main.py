@@ -12,7 +12,8 @@ Polls the PKP PLK Open Data API and writes into the three tables defined in
                  as JSONB in `stops`, upserted every poll. Also mirrored into
                  Redis as a hot cache for the frontend/API layer.
 
-A daily maintenance step prunes train_runs older than today.
+A daily maintenance step prunes train_runs older than yesterday. Yesterday is
+retained for overnight runs and Redis warm-starts.
 
 Response shapes were confirmed against real API output (2026-07-07):
 
@@ -35,6 +36,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -309,7 +311,7 @@ class Storage:
 
     # --- train_runs (hot path) ------------------------------------------ #
     def upsert_train_runs(self, trains: list[dict[str, Any]]) -> int:
-        today = dt.date.today().isoformat()
+        today = dt.datetime.now(WARSAW_TZ).date().isoformat()
         rows = []
         for t in trains:
             schedule_id = t.get("scheduleId")
@@ -337,7 +339,9 @@ class Storage:
                 ON CONFLICT (schedule_id, order_id, operating_date)
                 DO UPDATE SET train_status = EXCLUDED.train_status,
                               stops        = EXCLUDED.stops,
-                              updated_at   = now();
+                              updated_at   = now()
+                WHERE train_runs.train_status IS DISTINCT FROM EXCLUDED.train_status
+                   OR train_runs.stops        IS DISTINCT FROM EXCLUDED.stops;
                 """,
                 rows,
                 page_size=1000,
@@ -345,11 +349,59 @@ class Storage:
         return len(rows)
 
     def prune_old_runs(self) -> int:
+        # Retain yesterday for overnight trains that remain in flight after
+        # midnight and for a complete Redis warm-start window.
+        cutoff = dt.datetime.now(WARSAW_TZ).date() - dt.timedelta(days=1)
         with self._pg.cursor() as cur:
-            cur.execute("DELETE FROM train_runs WHERE operating_date < CURRENT_DATE;")
+            cur.execute(
+                "DELETE FROM train_runs WHERE operating_date < %s;", (cutoff,)
+            )
             return cur.rowcount
 
     # --- Redis hot cache ------------------------------------------------- #
+    def _cache_operation_values(
+        self,
+        trains: Iterable[dict[str, Any]],
+        ttl_seconds: int,
+        chunk: int,
+    ) -> list[str]:
+        """Write operation values in bounded pipelines and return their keys."""
+        keys: list[str] = []
+        pipe = self._redis.pipeline()
+        pending = 0
+        for train in trains:
+            schedule_id = train.get("scheduleId")
+            order_id = train.get("orderId")
+            operating_date = train.get("operatingDate")
+            if schedule_id is None or order_id is None or operating_date is None:
+                continue
+
+            date = str(operating_date)[:10]
+            run_key = f"{schedule_id}:{order_id}:{date}"
+            keys.append(run_key)
+            pipe.set(f"operation:{run_key}", json.dumps(train), ex=ttl_seconds)
+            pending += 1
+
+            # Flush in chunks so we never buffer the whole national fleet into
+            # one round trip (which overflows the socket write timeout).
+            if pending >= chunk:
+                pipe.execute()
+                pipe = self._redis.pipeline()
+                pending = 0
+
+        if pending:
+            pipe.execute()
+        return keys
+
+    def _replace_operations_index(self, keys: list[str]) -> None:
+        """Publish a completed cache generation.
+
+        The index deliberately has no TTL. Only operation values are eligible
+        for volatile eviction; if the worker stops, those values expire and the
+        frontend safely skips the missing MGET results referenced by this index.
+        """
+        self._redis.set("operations:index", json.dumps(keys))
+
     def cache_operations(
         self, trains: list[dict[str, Any]], ttl_seconds: int, chunk: int = 1000
     ) -> int:
@@ -374,29 +426,69 @@ class Storage:
             (today + dt.timedelta(days=1)).isoformat(),
         }
 
+        current_trains = (
+            train
+            for train in trains
+            if str(train.get("operatingDate") or "")[:10] in wanted
+        )
+        keys = self._cache_operation_values(current_trains, ttl_seconds, chunk)
+        # Publish the index only after every value pipeline succeeded. Readers
+        # therefore continue using the previous complete generation on failure.
+        self._replace_operations_index(keys)
+        return len(keys)
+
+    def warm_cache_from_postgres(
+        self, ttl_seconds: int, chunk: int = 1000
+    ) -> int:
+        """Rebuild the current Redis cache from Postgres after a restart.
+
+        Redis is intentionally non-persistent because all of its data is
+        reconstructable. A server-side cursor bounds Python memory while the
+        current three-day window is streamed from the durable train_runs table.
+        """
+        today = dt.datetime.now(WARSAW_TZ).date()
+        date_from = today - dt.timedelta(days=1)
+        date_to = today + dt.timedelta(days=1)
         keys: list[str] = []
-        pipe = self._redis.pipeline()
-        pending = 0
-        for t in trains:
-            schedule_id = t.get("scheduleId")
-            order_id = t.get("orderId")
-            operating_date = t.get("operatingDate")
-            if schedule_id is None or order_id is None or operating_date is None:
-                continue
-            if str(operating_date)[:10] not in wanted:
-                continue
-            run_key = f"{schedule_id}:{order_id}:{str(operating_date)[:10]}"
-            keys.append(run_key)
-            pipe.set(f"operation:{run_key}", json.dumps(t), ex=ttl_seconds)
-            pending += 1
-            # Flush in chunks so we never buffer the whole national fleet into
-            # one round trip (which overflows the socket write timeout).
-            if pending >= chunk:
-                pipe.execute()
-                pipe = self._redis.pipeline()
-                pending = 0
-        pipe.set("operations:index", json.dumps(keys), ex=ttl_seconds)
-        pipe.execute()
+
+        # Named cursors require a transaction. This method runs once at startup,
+        # before the normal autocommit write loop begins.
+        self._pg.autocommit = False
+        try:
+            with self._pg.cursor(name="warm_redis_cache") as cur:
+                cur.itersize = chunk
+                cur.execute(
+                    """
+                    SELECT schedule_id, order_id, operating_date,
+                           train_status, stops
+                    FROM train_runs
+                    WHERE operating_date BETWEEN %s AND %s
+                    ORDER BY operating_date, schedule_id, order_id;
+                    """,
+                    (date_from, date_to),
+                )
+
+                def cached_trains() -> Iterable[dict[str, Any]]:
+                    for schedule_id, order_id, operating_date, status, stops in cur:
+                        yield {
+                            "scheduleId": schedule_id,
+                            "orderId": order_id,
+                            "operatingDate": operating_date.isoformat(),
+                            "trainStatus": status,
+                            "stations": stops or [],
+                        }
+
+                keys = self._cache_operation_values(
+                    cached_trains(), ttl_seconds, chunk
+                )
+            self._pg.commit()
+        except Exception:
+            self._pg.rollback()
+            raise
+        finally:
+            self._pg.autocommit = True
+
+        self._replace_operations_index(keys)
         return len(keys)
 
     def close(self) -> None:
@@ -477,12 +569,20 @@ def main() -> int:
     known_station_ids: set[int] = set()
 
     try:
+        try:
+            n_warmed = storage.warm_cache_from_postgres(config.cache_ttl_seconds)
+            log.info("Startup: warmed %d current run(s) into Redis", n_warmed)
+        except psycopg2.Error as exc:
+            log.error("Startup cache warm — Postgres error: %s", exc)
+        except redis.RedisError as exc:
+            log.error("Startup cache warm — Redis error: %s", exc)
+
         while running:
             cycle_start = time.monotonic()
 
             # Run the daily job once when the calendar date rolls over (and on
             # first boot). Failures are logged but don't stop the live loop.
-            today = dt.date.today()
+            today = dt.datetime.now(WARSAW_TZ).date()
             if last_daily != today:
                 try:
                     sync_daily(client, storage)

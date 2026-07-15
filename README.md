@@ -92,7 +92,7 @@ Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (wa
 **How the worker runs (`data-sync/main.py`):**
 
 - **Live loop (every `POLL_INTERVAL_SECONDS`, default 30s):** `GET /operations?fullRoutes=true&withPlanned=true` for **all national trains** → upserts every run into `train_runs` (whole route as JSONB), and mirrors the **currently-relevant** ones (yesterday/today/tomorrow) into Redis — see [Redis cache layout](#redis-cache-layout).
-- **Daily job (on calendar-date rollover / first boot):** `GET /schedules` → upserts train identity into `trains`; then prunes `train_runs` rows before today.
+- **Daily job (on Warsaw calendar-date rollover / first boot):** `GET /schedules` → upserts train identity into `trains`; then prunes `train_runs` rows before yesterday (yesterday is retained for overnight runs and Redis warm-starts).
 - **Station names** are seeded from the `stations` id→name map **embedded in the `/operations` response** (only newly-seen ids each cycle), so no separate dictionary endpoint is needed.
 
 > ⚠️ **Cycle time is data-bound.** The `/operations` full-route payload covers the entire national fleet (~40k runs across a rolling week), so one cycle measures **~70–85s** (of which ~55–70s is the paginated fetch). `POLL_INTERVAL_SECONDS` is a **floor**, not a guarantee — if a cycle runs longer, the next starts immediately (zero sleep). If you need faster refresh later, filter by station/carrier (the API supports `carriersInclude` + station filters) or split the cadence.
@@ -102,7 +102,12 @@ Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (wa
 | Key | Value | TTL |
 |-----|-------|-----|
 | `operation:<scheduleId>:<orderId>:<operatingDate>` | one train's full `/operations` object (JSON) | `CACHE_TTL_SECONDS` (default 1800) |
-| `operations:index` | JSON array of all cached `<scheduleId>:<orderId>:<operatingDate>` keys | `CACHE_TTL_SECONDS` (default 1800) |
+| `operations:index` | JSON array of all cached `<scheduleId>:<orderId>:<operatingDate>` keys | none |
+
+The index is deliberately non-expiring, while every referenced operation value
+has a TTL. This protects the index from Redis's `volatile-lfu` eviction policy;
+if a value expires or is evicted, the read layer simply skips that missing MGET
+result. The worker replaces the index only after a complete cache write.
 
 > ⚠️ **The cache key MUST include `operatingDate`.** `(scheduleId, orderId)` looks unique but is not — it's only a primary key in `train_runs` *together with* `operating_date`, because `/operations` returns a rolling ~7-day window in which the same pair recurs on multiple dates. The key originally omitted the date, so **21,746 of 39,839 trains silently overwrote each other**, and the survivor for a given key was an arbitrary date (often days stale). The read layer then correctly rejected almost all of them as "past their last arrival" — the map rendered nothing while the worker logged perfect health.
 
@@ -276,6 +281,7 @@ docker compose exec data-sync python geocode_stations.py
 The whole backend — Postgres 18, Redis 8, and the `data-sync` worker — runs from the root `docker-compose.yml`.
 
 - **Ports are bound to `127.0.0.1` only** (reachable from the VPS itself, not the public internet). Reach them from a laptop via SSH tunnel: `ssh -L 5432:127.0.0.1:5432 -L 6379:127.0.0.1:6379 user@vps`.
+- **Redis is a bounded, non-persistent cache** (`768mb` dataset / `1g` container by default). AOF and RDB are disabled to avoid write amplification; the worker warms current runs from Postgres on startup.
 - **Postgres 18 volume** is mounted at `/var/lib/postgresql` (the parent, not `/data`) — required by the PG18 image.
 - **`schema.sql` runs only on first init** (empty data volume). To re-apply after changes: `docker compose exec -T postgres psql -U pkpways -d pkpways < schema.sql`, or `docker compose down -v` to wipe and re-init.
 
@@ -288,6 +294,7 @@ docker compose logs -f data-sync
 
 Healthy worker logs look like:
 ```
+Startup: warmed 14715 current run(s) into Redis
 Daily: upserted 7252 train identity row(s)
 Daily: pruned 32450 stale train_run(s)
 Live: seeded 2965 new station name(s)
@@ -315,6 +322,8 @@ docker compose exec postgres psql -U pkpways -d pkpways -c \
 |----------|---------|-------|
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | postgres | DB credentials |
 | `REDIS_PASSWORD` | redis | Redis auth |
+| `REDIS_MAXMEMORY` | redis | default `768mb` — maximum Redis dataset size before volatile operation values are evicted |
+| `REDIS_CONTAINER_MEMORY` | redis | default `1g` — hard container ceiling, leaving allocator/runtime headroom above `maxmemory` |
 | `PKP_API_KEY` | data-sync | **The only secret the worker strictly needs** |
 | `PKP_API_BASE_URL` | data-sync | defaults to `https://pdp-api.plk-sa.pl/api/v1` |
 | `POLL_INTERVAL_SECONDS` | data-sync | default `30` (a floor — see [Data Flow](#data-flow)) |
@@ -391,7 +400,6 @@ This is a **portfolio piece** — the design should be stunning:
 
 Open items, roughly by how much they'd bite:
 
-- **Timezone drift in the daily job.** `prune_old_runs()` uses Postgres `CURRENT_DATE` and the rollover check uses `dt.date.today()` — both **UTC**, while the API's dates are **Europe/Warsaw**. For the ~2h a day between Warsaw midnight and UTC midnight they disagree, so the daily job can prune/roll over against the wrong date. The Redis cache path is already Warsaw-correct (`WARSAW_TZ`); these two call sites are not.
 - **The frontend train `id` is `scheduleId:orderId`** — which, per the [schema note](#train_runs--live-runs-hot-path), is not unique across operating dates. Two runs of the same train (e.g. an overnight service and its next-day counterpart, both in flight) would collide on the same React key. The Redis key is now date-qualified; this one isn't yet.
 - **Cached records are fat (~8.1 KB each).** Each keeps `plannedSequenceNumber`, `actualSequenceNumber`, `isConfirmed` and other fields the map never reads. Slimming the cached shape would cut memory and read time several-fold.
 - **No sub-poll animation.** Markers jump on each 15s poll rather than gliding — position is recomputed per fetch, not tweened between them.

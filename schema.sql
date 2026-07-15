@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS trains (
 );
 
 -- (3) Live runs — the /operations payload, whole route as JSONB, upserted each
--- poll. Live-only: a daily job prunes anything before today. No FK to trains on
+-- poll. Live-only: a daily job prunes anything before yesterday. Yesterday is
+-- retained for overnight runs and Redis warm-starts. No FK to trains on
 -- purpose — a run can appear in /operations before the daily /schedules sync has
 -- inserted its train row, so the join stays best-effort (LEFT JOIN).
 CREATE TABLE IF NOT EXISTS train_runs (
@@ -73,7 +74,9 @@ COMMIT;
 --   ON CONFLICT (schedule_id, order_id, operating_date)
 --   DO UPDATE SET train_status = EXCLUDED.train_status,
 --                 stops        = EXCLUDED.stops,
---                 updated_at   = now();
+--                 updated_at   = now()
+--   WHERE train_runs.train_status IS DISTINCT FROM EXCLUDED.train_status
+--      OR train_runs.stops        IS DISTINCT FROM EXCLUDED.stops;
 --
 -- List active trains (with labels):
 --   SELECT r.schedule_id, r.order_id, t.number, t.carrier_code, r.train_status, r.stops
@@ -84,4 +87,4 @@ COMMIT;
 --   ORDER BY t.carrier_code, t.number;
 --
 -- Daily prune (live-only retention):
---   DELETE FROM train_runs WHERE operating_date < CURRENT_DATE;
+--   DELETE FROM train_runs WHERE operating_date < CURRENT_DATE - 1;
