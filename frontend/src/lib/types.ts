@@ -58,6 +58,8 @@ export type Train = {
   number: string
   /** Optional service name, e.g. "Mazowsze". */
   name?: string
+  /** Commercial service/category symbol, e.g. "S2", "R7", or "IC". */
+  category?: string
   carrierId: CarrierId
   /** Ordered list of located stops (>= 2). */
   stops: RouteStop[]

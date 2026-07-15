@@ -41,7 +41,12 @@ const MAX_TRAINS = Number(process.env.MAX_TRAINS ?? 1500)
 // Reference-data caches (stations + train identity change slowly)
 // --------------------------------------------------------------------------- //
 type StationRow = { name: string; lat: number; lng: number }
-type IdentityRow = { number: string; name: string | null; carrierId: CarrierId }
+type IdentityRow = {
+  number: string
+  name: string | null
+  category: string | null
+  carrierId: CarrierId
+}
 
 type RefCache<T> = { data: T; at: number }
 const REF_TTL_MS = 60_000
@@ -74,6 +79,7 @@ async function getIdentities(): Promise<Map<string, IdentityRow>> {
     map.set(`${r.schedule_id}:${r.order_id}`, {
       number: r.number ?? '',
       name: r.name,
+      category: r.type,
       carrierId: resolveCarrierId(r.carrier_code, r.type),
     })
   }
@@ -206,6 +212,7 @@ function toLive(
       id,
       number: identity?.number || id,
       name: identity?.name || undefined,
+      category: identity?.category || undefined,
       carrierId: identity?.carrierId ?? 'OTHER',
       stops: located.map((l) => l.stop),
       position,

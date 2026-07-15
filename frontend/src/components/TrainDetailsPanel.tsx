@@ -2,6 +2,7 @@
 
 import { useApp } from '@/app/providers'
 import { getCarrier } from '@/lib/carriers'
+import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { TrainLive } from '@/lib/types'
 import { CloseIcon, TrainGlyph } from './icons'
 
@@ -35,6 +36,7 @@ export function TrainDetailsPanel({
 }) {
   const { t } = useApp()
   const carrier = getCarrier(train.carrierId)
+  const identity = getTrainIdentity(train)
 
   const from = train.stops[train.fromIndex]
   const to = train.stops[train.toIndex]
@@ -56,13 +58,13 @@ export function TrainDetailsPanel({
           <TrainGlyph className="h-6 w-6" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-lg font-semibold tracking-tight text-slate-900 dark:text-white">
-              {train.number}
+          <div className="flex min-w-0 items-baseline gap-2">
+            <h2 className="min-w-0 truncate text-lg font-semibold tracking-tight text-slate-900 dark:text-white">
+              {identity.primary}
             </h2>
-            {train.name && (
-              <span className="truncate text-sm text-slate-400 dark:text-slate-500">
-                · {train.name}
+            {identity.secondary && (
+              <span className="shrink-0 truncate font-mono text-xs text-slate-500 dark:text-slate-400">
+                {identity.secondary}
               </span>
             )}
           </div>
@@ -77,7 +79,7 @@ export function TrainDetailsPanel({
           type="button"
           onClick={onClose}
           aria-label={t('close')}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-500/10 hover:text-slate-700 dark:hover:text-slate-200"
+          className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-lg text-slate-400 transition hover:bg-slate-500/10 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 dark:hover:text-slate-200"
         >
           <CloseIcon className="h-4 w-4" />
         </button>

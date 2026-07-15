@@ -8,8 +8,8 @@
 --
 --   (1) stations   - coordinates. The ONLY data the API never provides; we
 --                    geocode station names once and cache them here.
---   (2) trains     - train identity (number, carrier, type). Also absent from
---                    /operations, so fed from /schedules once per day.
+--   (2) trains     - train identity (number, name, carrier, category). Also
+--                    absent from /operations, so fed from /schedules daily.
 --   (3) train_runs - live runs: the /operations payload, whole route as JSONB,
 --                    upserted every poll. Live-only (old rows pruned daily).
 --
@@ -32,14 +32,15 @@ CREATE TABLE IF NOT EXISTS stations (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- (2) Train identity — number, carrier, type. NOT in /operations, so this is
--- fed from /schedules once/day. Keyed by (scheduleId, orderId), date-independent.
+-- (2) Train identity — number, name, carrier, category. NOT in /operations, so
+-- this is fed from /schedules once/day. Keyed by (scheduleId, orderId),
+-- date-independent.
 CREATE TABLE IF NOT EXISTS trains (
     schedule_id   INTEGER NOT NULL,
     order_id      INTEGER NOT NULL,
-    number        VARCHAR(30),      -- e.g. "IC 3512"  (confirm field name in /schedules)
-    name          VARCHAR(200),     -- optional service name, e.g. "Mazowsze"
-    type          VARCHAR(30),      -- e.g. "IC", "REG"
+    number        VARCHAR(30),      -- nationalNumber, e.g. "99216"
+    name          VARCHAR(200),     -- optional service name from /schedules
+    type          VARCHAR(30),      -- commercialCategorySymbol, e.g. "S2", "IC"
     carrier_code  TEXT,             -- "KM","SKM","PKP INTERCITY",... drives marker color + carrier filter
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (schedule_id, order_id)

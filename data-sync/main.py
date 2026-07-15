@@ -6,8 +6,8 @@ Polls the PKP PLK Open Data API and writes into the three tables defined in
   * stations   — id + name, seeded from the `stations` id->name map that the
                  /operations response embeds. Geocoding (name -> lat/lng) is a
                  separate concern, left NULL here.
-  * trains     — train identity (number, carrier, type), refreshed once per day
-                 from /schedules.
+  * trains     — train identity (number, name, carrier, category), refreshed
+                 once per day from /schedules.
   * train_runs — the live /operations payload; each train's whole route stored
                  as JSONB in `stops`, upserted every poll. Also mirrored into
                  Redis as a hot cache for the frontend/API layer.
@@ -20,7 +20,7 @@ Response shapes were confirmed against real API output (2026-07-07):
   /operations -> { "pagination": {...}, "trains": [ {scheduleId, orderId,
                    operatingDate, trainStatus, stations: [...] } ],
                    "stations": { "<id>": "<name>", ... } }
-  /schedules  -> { "routes": [ {scheduleId, orderId, carrierCode,
+  /schedules  -> { "routes": [ {scheduleId, orderId, name, carrierCode,
                    nationalNumber, commercialCategorySymbol, ... } ],
                    "dictionaries": {...} }
 
@@ -208,7 +208,7 @@ class PkpApiClient:
         return trains, stations
 
     def get_schedule_routes(self, page_size: int = 10000) -> list[dict[str, Any]]:
-        """Train identity rows (number, carrier, category). Refreshed daily."""
+        """Train identity rows (number, name, carrier, category). Refreshed daily."""
         routes: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -282,10 +282,10 @@ class Storage:
                 (
                     int(schedule_id),
                     int(order_id),
-                    r.get("nationalNumber"),            # number  e.g. "99216"
-                    None,                                # name (service name) — not in /schedules
-                    r.get("commercialCategorySymbol"),   # type    e.g. "S1", "R7"
-                    r.get("carrierCode"),                # carrier "KM", "SKM", ...
+                    r.get("nationalNumber"),             # number   e.g. "99216"
+                    r.get("name"),                       # name     e.g. an IC service name
+                    r.get("commercialCategorySymbol"),  # category e.g. "S1", "R7"
+                    r.get("carrierCode"),                # carrier  "KM", "SKM", ...
                 )
             )
         if not rows:

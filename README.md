@@ -133,13 +133,14 @@ The one thing the API never provides. Seeded id + name from `/operations`; `lati
 | `geocode_confidence` | `TEXT` | `'high'` \| `'low'` \| `'unmatched'` |
 
 ### `trains` — train identity
-Number, carrier, type. Fed daily from `/schedules`.
+Number, optional public name, carrier, and commercial category. Fed daily from
+`/schedules`.
 
 | Column | Type | Source (`/schedules` route) |
 |--------|------|------------------------------|
 | `schedule_id`, `order_id` | `INTEGER` (composite PK) | `scheduleId`, `orderId` |
 | `number` | `VARCHAR(30)` | `nationalNumber` |
-| `name` | `VARCHAR(200)` | (none — always NULL) |
+| `name` | `VARCHAR(200)` | `name` (optional/omitted when unnamed, e.g. present for named IC services) |
 | `type` | `VARCHAR(30)` | `commercialCategorySymbol` (e.g. `S1`, `R7`) |
 | `carrier_code` | `TEXT` | `carrierCode` (`KM`, `SKM`, `PKP INTERCITY`, …) |
 
@@ -350,7 +351,8 @@ The app reads live data from Redis/Postgres (never the PKP API directly).
 `src/lib/server/datastore.ts` (`import 'server-only'`) is the only thing that touches the datastores:
 
 - Reads `operations:index` from Redis, then batched `MGET`s the `operation:*` keys (2,000 at a time).
-- Joins Postgres `stations` (coordinates) and `trains` (number, carrier), both cached 60s.
+- Joins Postgres `stations` (coordinates) and `trains` (number, name, category,
+  carrier), both cached 60s.
 - Computes each train's live position (see [Interpolation](#-train-position-interpolation)) and memoizes the result for 8s.
 - Caps output at **`MAX_TRAINS`** (default 1500) — the full ~40k fleet can't be rendered on Leaflet.
 

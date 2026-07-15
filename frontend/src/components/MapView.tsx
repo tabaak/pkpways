@@ -2,19 +2,21 @@
 
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   CircleMarker,
   MapContainer,
   Marker,
   Polyline,
   TileLayer,
+  Tooltip,
   useMap,
   useMapEvents,
   ZoomControl,
 } from 'react-leaflet'
 import { getCarrier } from '@/lib/carriers'
 import { routeCoords } from '@/lib/geo'
+import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { Theme, TrainLive } from '@/lib/types'
 import { TRAIN_PATH } from './icons'
 
@@ -72,6 +74,15 @@ function TrainMarker({
   onSelect: (id: string) => void
 }) {
   const carrier = getCarrier(train.carrierId)
+  const identity = getTrainIdentity(train)
+  const accessibleLabel = [identity.primary, identity.secondary, carrier.name]
+    .filter(Boolean)
+    .join(', ')
+  const markerRef = useRef<L.Marker>(null)
+
+  useEffect(() => {
+    markerRef.current?.getElement()?.setAttribute('aria-label', accessibleLabel)
+  }, [accessibleLabel])
   // Round the heading so the icon only rebuilds on a meaningful turn.
   const roundedBearing = Math.round(train.bearing / 5) * 5
 
@@ -82,11 +93,29 @@ function TrainMarker({
 
   return (
     <Marker
+      ref={markerRef}
       position={[train.position.lat, train.position.lng]}
       icon={icon}
+      alt={accessibleLabel}
       zIndexOffset={selected ? 1000 : 0}
       eventHandlers={{ click: () => onSelect(train.id) }}
-    />
+    >
+      <Tooltip
+        direction="top"
+        offset={[0, -16]}
+        opacity={1}
+        className="train-tooltip"
+      >
+        <div className="min-w-28 max-w-56">
+          <p className="truncate text-sm font-semibold tracking-tight text-slate-900 dark:text-white">
+            {identity.primary}
+          </p>
+          <p className="mt-0.5 truncate text-[11px] font-medium text-slate-600 dark:text-slate-300">
+            {[identity.secondary, carrier.name].filter(Boolean).join(' · ')}
+          </p>
+        </div>
+      </Tooltip>
+    </Marker>
   )
 }
 

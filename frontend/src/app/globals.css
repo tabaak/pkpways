@@ -110,6 +110,17 @@ html.dark .glass {
   z-index: 1000;
 }
 
+.train-marker-wrapper:focus-visible {
+  outline: none;
+}
+
+.train-marker-wrapper:focus-visible .train-marker__body {
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 0 6px var(--c),
+    0 4px 12px -1px rgba(0, 0, 0, 0.5);
+}
+
 /* Directional pointer that rotates with the train's heading. */
 .train-marker__dir {
   position: absolute;
@@ -196,6 +207,31 @@ html.dark .train-marker__body {
   text-align: center;
   border: 1.5px solid #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Compact identity card shown when a marker is hovered or keyboard-focused. */
+.leaflet-tooltip.train-tooltip {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px -12px rgba(15, 23, 42, 0.45);
+}
+
+html.dark .leaflet-tooltip.train-tooltip {
+  background: rgba(17, 24, 39, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 12px 34px -12px rgba(0, 0, 0, 0.7);
+}
+
+.leaflet-tooltip-top.train-tooltip::before {
+  border-top-color: rgba(255, 255, 255, 0.9);
+}
+
+html.dark .leaflet-tooltip-top.train-tooltip::before {
+  border-top-color: rgba(17, 24, 39, 0.9);
 }
 
 /* ---------------------------------------------------------------------------
