@@ -187,7 +187,7 @@ export default function MapView({
       center={POLAND_CENTER}
       zoom={6}
       minZoom={5}
-      maxZoom={12}
+      maxZoom={14}
       zoomControl={false}
       maxBounds={POLAND_BOUNDS}
       maxBoundsViscosity={0.9}
