@@ -70,6 +70,8 @@ export type TrainLive = Train & {
   position: LatLng
   /** Heading in degrees (0 = north, clockwise). */
   bearing: number
+  /** Time progress through the current station-to-station segment (0..1). */
+  segmentProgress: number
   /** Index of the stop the train most recently left. */
   fromIndex: number
   /** Index of the stop the train is heading toward. */

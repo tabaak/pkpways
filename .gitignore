@@ -18,6 +18,7 @@ data-sync/.venv/
 data-sync/__pycache__/
 data-sync/*.pyc
 data-sync/.env
+__pycache__/
 
 # --- secrets that must never be committed ---
 api-key-pkp.txt

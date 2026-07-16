@@ -217,6 +217,7 @@ function toLive(
       stops: located.map((l) => l.stop),
       position,
       bearing: bearing(from, to),
+      segmentProgress: t,
       fromIndex: i,
       toIndex: i + 1,
       // "Current" delay = delay at the stop being approached.

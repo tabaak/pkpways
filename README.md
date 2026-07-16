@@ -17,7 +17,8 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 ### Key Features
 
 - **🗺️ Interactive Map** — Full-screen Leaflet map with OpenStreetMap tiles, centered on Poland
-- **🚄 Live Train Markers** — Animated train icons moving between stations based on real-time schedule + delay data
+- **🚄 Live Train Markers** — Train icons moving along generated railway geometry based on real-time schedule + delay data
+- **🛤️ Railway-accurate routes** — Selected routes follow OSM railway tracks, with straight-line fallback where routing is unavailable
 - **🔍 Train Search** — Search by train number to find and track any specific train
 - **📋 Train Details Panel** — Click any train to see route, stops, delays, and carrier info
 - **🎛️ Carrier Filters** — Filter by carrier (PKP Intercity, Polregio, Koleje Mazowieckie, SKM, etc.)
@@ -32,6 +33,7 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 | Postgres 18 + Redis | ✅ Live — running via Docker Compose on the VPS |
 | Database schema | ✅ Applied (`stations`, `trains`, `train_runs`) |
 | Station geocoding (lat/lng) | ✅ Done — **2,953 / 2,964** stations have coordinates (see [Station Coordinates](#-station-coordinates--geocoding)) |
+| Static railway geometry | ✅ Generated — **7,985** directed pairs, **120** straight-line fallbacks (see [Railway geometry](#-railway-geometry)) |
 | `frontend/` map UI | ✅ Wired — reads live data via `GET /api/trains` (see [Frontend](#-frontend-nextjs)) |
 
 ---
@@ -46,11 +48,12 @@ pkpways/
 ├── schema.sql           # PostgreSQL schema, auto-applied on first DB init
 ├── .env.example         # Template for the single root .env (passwords + API key)
 ├── frontend/            # Next.js 16 app (the map UI) — reads Redis/Postgres, never the PKP API
-└── data-sync/           # Python worker: the ONLY thing that calls the PKP PLK API
+├── data-sync/           # Python worker: the ONLY thing that calls the PKP PLK API
     ├── main.py               # Poll loop + Postgres/Redis writers
     ├── geocode_stations.py   # One-off: backfills stations.latitude/longitude
     ├── Dockerfile            # Built as the compose `data-sync` service
     └── requirements.txt
+└── tools/rail-routing/    # Offline OSRM profile + static geometry generator
 ```
 
 - **`data-sync/`** owns the `PKP_API_KEY` and is the sole caller of the PKP PLK API. It writes fresh data on a polling loop.
@@ -255,9 +258,24 @@ The core challenge: **the API gives station-level arrival/departure times and de
 1. Take the train's stops from its cached `/operations` object, keeping only stops whose station has coordinates (a train needs ≥2 to be placeable).
 2. Compute each stop's **effective** times: `actual ?? planned + delayMinutes`.
 3. Find the segment where *now* falls between one stop's effective departure and the next stop's effective arrival. A train before its first departure or past its last arrival returns `null` — so **only en-route trains are rendered**.
-4. Linearly interpolate lat/lng across that segment, and derive a bearing so the marker points the right way.
+4. Compute time progress `t` through that segment. The server keeps the
+   straight-line position as a safe fallback, while the browser places the
+   marker at the same `t` along the pair's routed geometry using cumulative
+   distance.
 
 **Timezone handling:** API timestamps are naive (no offset) and mean Europe/Warsaw. Rather than convert, both the stop times and "now" are compared in the same **pseudo-UTC frame** — the wall-clock digits are read as if they were UTC, and `warsawNowMs()` derives the current time the same way. Two wrongs cancel; the comparison is correct and DST-safe.
+
+### 🛤️ Railway geometry
+
+The selected-route polyline and live marker use the generated static asset at
+`frontend/public/data/rail-segments.json`. It contains **7,985 directed station
+pairs** generated from the live database's located route sequences:
+
+- The one-off generator is [`tools/rail-routing/generate_rail_geometry.py`](tools/rail-routing/generate_rail_geometry.py).
+- The temporary OSRM railway profile and exact Poland-extract setup are documented in [`tools/rail-routing/README.md`](tools/rail-routing/README.md).
+- The committed snapshot is 6,028,760 bytes, with 7,865 routed pairs and 120 logged straight-line fallbacks.
+- Generation validates every final Google polyline6 value with the same decoding rules used by the browser before writing the asset. A malformed segment must fail the job rather than degrade to a straight line at runtime.
+- Regenerate it after timetable or network changes; the live worker and Redis hot path never carry these polylines.
 
 ### 📍 Station Coordinates — Geocoding
 
@@ -354,6 +372,10 @@ The app reads live data from Redis/Postgres (never the PKP API directly).
 - Joins Postgres `stations` (coordinates) and `trains` (number, name, category,
   carrier), both cached 60s.
 - Computes each train's live position (see [Interpolation](#-train-position-interpolation)) and memoizes the result for 8s.
+- The browser uses the bundled `rail-segments.json` geometry to replace straight
+  station hops with routed railway geometry; missing or flagged pairs remain
+  straight-line fallbacks. Keeping the asset in the frontend bundle prevents a
+  static-file request or cache failure from degrading every route to chords.
 - Caps output at **`MAX_TRAINS`** (default 1500) — the full ~40k fleet can't be rendered on Leaflet.
 
 `pg.Pool` and `ioredis` clients are singletons pinned to `globalThis` so hot-reload doesn't leak connections.
@@ -372,7 +394,7 @@ The VPS datastores are bound to `127.0.0.1`, so local dev needs an SSH tunnel:
 ssh -N \
   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
   -L 5432:localhost:5432 -L 6379:localhost:6379 \
-  ubuntu@main-vps
+  oracle_vps
 ```
 
 ```bash

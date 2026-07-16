@@ -2,7 +2,7 @@
 
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CircleMarker,
   MapContainer,
@@ -16,6 +16,7 @@ import {
 } from 'react-leaflet'
 import { getCarrier } from '@/lib/carriers'
 import { routeCoords } from '@/lib/geo'
+import { liveRailPosition, loadRailGeometry, stitchedRoute, type RailGeometryAsset } from '@/lib/railGeometry'
 import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { Theme, TrainLive } from '@/lib/types'
 import { TRAIN_PATH } from './icons'
@@ -66,10 +67,12 @@ function buildTrainIcon(
  *  the DOM (which would interrupt hover/pulse animations). */
 function TrainMarker({
   train,
+  railGeometry,
   selected,
   onSelect,
 }: {
   train: TrainLive
+  railGeometry: RailGeometryAsset | null
   selected: boolean
   onSelect: (id: string) => void
 }) {
@@ -79,12 +82,16 @@ function TrainMarker({
     .filter(Boolean)
     .join(', ')
   const markerRef = useRef<L.Marker>(null)
+  const rendered = useMemo(
+    () => (railGeometry ? liveRailPosition(train, railGeometry) : train),
+    [railGeometry, train]
+  )
 
   useEffect(() => {
     markerRef.current?.getElement()?.setAttribute('aria-label', accessibleLabel)
   }, [accessibleLabel])
   // Round the heading so the icon only rebuilds on a meaningful turn.
-  const roundedBearing = Math.round(train.bearing / 5) * 5
+  const roundedBearing = Math.round(rendered.bearing / 5) * 5
 
   const icon = useMemo(
     () => buildTrainIcon(carrier.color, roundedBearing, train.delay, selected),
@@ -94,7 +101,7 @@ function TrainMarker({
   return (
     <Marker
       ref={markerRef}
-      position={[train.position.lat, train.position.lng]}
+      position={[rendered.position.lat, rendered.position.lng]}
       icon={icon}
       alt={accessibleLabel}
       zIndexOffset={selected ? 1000 : 0}
@@ -120,10 +127,22 @@ function TrainMarker({
 }
 
 /** The route polyline + station dots for the selected train. */
-function SelectedRoute({ train }: { train: TrainLive }) {
+function SelectedRoute({
+  train,
+  railGeometry,
+  loading,
+}: {
+  train: TrainLive
+  railGeometry: RailGeometryAsset | null
+  loading: boolean
+}) {
+  // Do not draw misleading station-to-station chords while the static railway
+  // geometry is being fetched. The route appears as soon as it is ready.
+  if (loading) return null
   const carrier = getCarrier(train.carrierId)
   const coords = routeCoords(train)
-  const positions = coords.map((c) => [c.lat, c.lng] as [number, number])
+  const routed = stitchedRoute(train, railGeometry)
+  const positions = routed.map((c) => [c.lat, c.lng] as [number, number])
 
   return (
     <>
@@ -181,6 +200,29 @@ export default function MapView({
 }) {
   const tiles = TILES[theme]
   const selected = trains.find((t) => t.id === selectedId) ?? null
+  const [railGeometry, setRailGeometry] = useState<RailGeometryAsset | null>(null)
+  const [railGeometryLoading, setRailGeometryLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    let attempts = 0
+    const fetchGeometry = () => {
+      loadRailGeometry().then((asset) => {
+        if (cancelled) return
+        if (asset || attempts >= 3) {
+          setRailGeometry(asset)
+          setRailGeometryLoading(false)
+          return
+        }
+        attempts += 1
+        window.setTimeout(fetchGeometry, 1500)
+      })
+    }
+    fetchGeometry()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <MapContainer
@@ -205,12 +247,19 @@ export default function MapView({
       <ZoomControl position="bottomright" />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
 
-      {selected && <SelectedRoute train={selected} />}
+      {selected && (
+        <SelectedRoute
+          train={selected}
+          railGeometry={railGeometry}
+          loading={railGeometryLoading}
+        />
+      )}
 
       {trains.map((train) => (
         <TrainMarker
           key={train.id}
           train={train}
+          railGeometry={railGeometry}
           selected={train.id === selectedId}
           onSelect={onSelect}
         />
