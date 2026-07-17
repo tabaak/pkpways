@@ -33,6 +33,17 @@ const DICT = {
     pl: 'Brak danych o pociągach na żywo',
     en: 'No live train data yet',
   },
+  searchLabel: { pl: 'Szukaj pociągu', en: 'Search train' },
+  searchPlaceholder: {
+    pl: 'Szukaj numeru pociągu…',
+    en: 'Search train number…',
+  },
+  clearSearch: { pl: 'Wyczyść', en: 'Clear' },
+  noResults: { pl: 'Nie znaleziono pociągu', en: 'No matching train' },
+  noResultsHint: {
+    pl: 'Sprawdź numer lub kategorię, np. „IC 3512” lub „S2”.',
+    en: 'Check the number or category, e.g. “IC 3512” or “S2”.',
+  },
 } as const
 
 export type I18nKey = keyof typeof DICT

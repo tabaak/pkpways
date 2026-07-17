@@ -188,23 +188,14 @@ function toLive(
   }
   if (located.length < 2) return null
 
-  // Find the segment [i, i+1] containing `now`: leave time of i .. reach time
-  // of i+1. Fall back across missing endpoints so a null time doesn't break it.
-  for (let i = 0; i < located.length - 1; i++) {
-    const leave = located[i].dep ?? located[i].arr
-    const reach = located[i + 1].arr ?? located[i + 1].dep
-    if (leave == null || reach == null || reach <= leave) continue
-    if (now < leave) {
-      // Before the very first departure → not moving yet.
-      if (i === 0) return null
-      continue
-    }
-    if (now >= reach) continue // already past this segment
-
-    const t = (now - leave) / (reach - leave)
-    const from = located[i].stop
-    const to = located[i + 1].stop
-    const position = lerp(from, to, t)
+  const snapshotForSegment = (
+    index: number,
+    progress: number,
+    segmentStartsInMs: number,
+    delay: number
+  ): TrainLive => {
+    const from = located[index].stop
+    const to = located[index + 1].stop
     const identity = identities.get(identityId)
     return {
       id,
@@ -213,15 +204,40 @@ function toLive(
       category: identity?.category || undefined,
       carrierId: identity?.carrierId ?? 'OTHER',
       stops: located.map((l) => l.stop),
-      position,
+      position: lerp(from, to, progress),
       bearing: bearing(from, to),
-      segmentProgress: t,
-      segmentDurationMs: reach - leave,
-      fromIndex: i,
-      toIndex: i + 1,
-      // "Current" delay = delay at the stop being approached.
-      delay: to.delay,
+      segmentProgress: progress,
+      segmentDurationMs:
+        (located[index + 1].arr ?? located[index + 1].dep ?? 0) -
+        (located[index].dep ?? located[index].arr ?? 0),
+      segmentStartsInMs,
+      fromIndex: index,
+      toIndex: index + 1,
+      delay,
     }
+  }
+
+  // Find the segment [i, i+1] containing `now`: leave time of i .. reach time
+  // of i+1. During an intermediate station dwell, keep the marker at station i
+  // and tell the client how long it must wait before advancing on this segment.
+  for (let i = 0; i < located.length - 1; i++) {
+    const leave = located[i].dep ?? located[i].arr
+    const reach = located[i + 1].arr ?? located[i + 1].dep
+    if (leave == null || reach == null || reach <= leave) continue
+    if (now < leave) {
+      // Before the very first departure → not moving yet.
+      if (i === 0) return null
+
+      const arrived = located[i].arr
+      if (arrived != null && now >= arrived) {
+        return snapshotForSegment(i, 0, leave - now, located[i].stop.delay)
+      }
+      continue
+    }
+    if (now >= reach) continue // already past this segment
+
+    const t = (now - leave) / (reach - leave)
+    return snapshotForSegment(i, t, 0, located[i + 1].stop.delay)
   }
   return null // scheduled but not started, or already arrived
 }

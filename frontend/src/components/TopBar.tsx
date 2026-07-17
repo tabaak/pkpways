@@ -1,14 +1,25 @@
 'use client'
 
+import { useState } from 'react'
 import { useApp } from '@/app/providers'
-import { MoonIcon, SunIcon, TrainGlyph } from './icons'
+import type { TrainLive } from '@/lib/types'
+import { MoonIcon, SearchIcon, SunIcon, TrainGlyph } from './icons'
+import { SearchBar } from './SearchBar'
 
-export function TopBar({ trainCount }: { trainCount: number }) {
+export function TopBar({
+  trains,
+  onSelect,
+}: {
+  trains: TrainLive[]
+  onSelect: (id: string) => void
+}) {
   const { theme, toggleTheme, lang, toggleLang, t } = useApp()
+  const [searchOpen, setSearchOpen] = useState(false)
+  const trainCount = trains.length
 
   return (
     <header className="pointer-events-none absolute inset-x-0 top-0 z-[1100] flex justify-center px-3 pt-3 sm:px-4 sm:pt-4">
-      <div className="glass pointer-events-auto flex w-full max-w-4xl items-center gap-3 rounded-2xl px-3 py-2 sm:px-4 sm:py-2.5">
+      <div className="glass pointer-events-auto relative flex w-full max-w-4xl items-center gap-3 rounded-2xl px-3 py-2 sm:px-4 sm:py-2.5">
         {/* Brand */}
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white shadow-md">
@@ -38,6 +49,17 @@ export function TopBar({ trainCount }: { trainCount: number }) {
               </span>
             </div>
           )}
+
+          {/* Search toggle — expands the search field over the bar. */}
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            aria-label={t('searchLabel')}
+            title={t('searchLabel')}
+            className="grid h-9 w-9 place-items-center rounded-xl bg-white/50 text-slate-600 transition hover:bg-white/80 hover:text-slate-900 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+          >
+            <SearchIcon className="h-[18px] w-[18px]" />
+          </button>
 
           {/* Language toggle */}
           <button
@@ -81,6 +103,15 @@ export function TopBar({ trainCount }: { trainCount: number }) {
             )}
           </button>
         </div>
+
+        {/* Search by train number — expands over the bar on demand. */}
+        {searchOpen && (
+          <SearchBar
+            trains={trains}
+            onSelect={onSelect}
+            onClose={() => setSearchOpen(false)}
+          />
+        )}
       </div>
     </header>
   )

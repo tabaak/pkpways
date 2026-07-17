@@ -19,7 +19,7 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 - **🗺️ Interactive Map** — Full-screen Leaflet map with OpenStreetMap tiles, centered on Poland
 - **🚄 Live Train Markers** — Train icons moving along generated railway geometry based on real-time schedule + delay data
 - **🛤️ Railway-accurate routes** — Selected routes follow OSM railway tracks, with straight-line fallback where routing is unavailable
-- **🔍 Train Search** — Search by train number to find and track any specific train
+- **🔍 Train Search** — Expand-on-demand search that matches by number, category, or service name and flies the map to the chosen train
 - **📋 Train Details Panel** — Click any train to see route, stops, delays, and carrier info
 - **🎛️ Carrier Filters** — Filter by carrier (PKP Intercity, Polregio, Koleje Mazowieckie, SKM, etc.)
 - **🌐 Bilingual** — Full PL/EN language toggle
@@ -257,11 +257,14 @@ The core challenge: **the API gives station-level arrival/departure times and de
 
 1. Take the train's stops from its cached `/operations` object, keeping only stops whose station has coordinates (a train needs ≥2 to be placeable).
 2. Compute each stop's **effective** times: `actual ?? planned + delayMinutes`.
-3. Find the segment where *now* falls between one stop's effective departure and the next stop's effective arrival. A train before its first departure or past its last arrival returns `null` — so **only en-route trains are rendered**.
+3. Find the segment where *now* falls between one stop's effective departure and
+   the next stop's effective arrival. During a dwell at an intermediate station,
+   keep the train visible at that station until its effective departure. A train
+   before its first departure or past its last arrival returns `null`.
 4. Compute time progress `t` and the effective segment duration
    (`reach - leave`). The API returns both as `segmentProgress` and
-   `segmentDurationMs`, together with the instant at which the snapshot was
-   sampled.
+   `segmentDurationMs`, plus `segmentStartsInMs` when the marker must wait at a
+   station, together with the instant at which the snapshot was sampled.
 5. The browser advances `t` continuously from that sampled instant and places
    the marker by cumulative distance along the routed railway geometry. Fresh
    15-second snapshots correct the position without making movement depend on
@@ -400,8 +403,30 @@ Stops ship with their `name`/`lat`/`lng` embedded, so the **browser needs no sta
 `GET /api/trains` → `{ trains, count, at }` (`runtime = 'nodejs'`,
 `force-dynamic`, `Cache-Control: no-store`). `at` is the time the interpolated
 positions were sampled—not merely the HTTP response time—and each train carries
-`segmentProgress` plus `segmentDurationMs`. `AppShell` polls every 15 seconds;
-the animation loop fills the interval between polls.
+`segmentProgress`, `segmentDurationMs`, and a dwell-time
+`segmentStartsInMs`. `AppShell` polls every 15 seconds; the animation loop fills
+the interval between polls.
+
+### Search
+
+`src/components/SearchBar.tsx` is a keyboard-navigable combobox for finding a
+train among the live set — no extra API call, it filters the already-loaded
+`trains` client-side.
+
+- **Discoverable on demand.** The top bar shows only a search icon; clicking it
+  expands the field *over* the bar (`.glass-strong`, a near-solid surface so the
+  map doesn't bleed through). It closes on ✕, `Escape`, an outside click, or
+  after a pick.
+- **Matching** is whitespace- and case-insensitive across `number`, `category`,
+  and `name`, so `IC3512` finds `IC 3512`. Results are ranked (prefix hits
+  first) and capped at 8; each row shows the carrier badge, train identity,
+  origin → destination, and delay.
+- **Picking a train** selects it (opening `TrainDetailsPanel`) and re-centers the
+  map on its live position via `MapFocus` — `flyTo`, or `setView` under
+  `prefers-reduced-motion`. A per-pick nonce re-triggers the pan even when the
+  same train is chosen again.
+- Full ARIA `combobox`/`listbox` semantics with `aria-activedescendant`; ↑/↓
+  move the highlight, `Enter` selects.
 
 ### Running it locally
 
@@ -443,8 +468,9 @@ Open items, roughly by how much they'd bite:
 
 - **Cached records are fat (~8.1 KB each).** Each keeps `plannedSequenceNumber`, `actualSequenceNumber`, `isConfirmed` and other fields the map never reads. Slimming the cached shape would cut memory and read time several-fold.
 - **Client animation is schedule-derived, not GPS.** Between 15s API polls, markers advance smoothly along the current routed segment using its effective travel duration. A fresh poll corrects the snapshot, but the underlying position remains an interpolation of timetable and delay data.
-- **No viewport culling or clustering.** Every currently moving, placeable train
-  is rendered, so marker cost grows with the number of simultaneous runs.
+- **No viewport culling or clustering.** With no selection, every active,
+  placeable train is rendered, so marker cost grows with the number of
+  simultaneous runs. Selecting a train intentionally isolates its marker.
 - **The full route ships with every marker.** Only the *selected* train needs its route; splitting that into `/api/trains/[id]` would shrink the payload substantially.
 
 ---

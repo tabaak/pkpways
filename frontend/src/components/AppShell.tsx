@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useApp } from '@/app/providers'
 import type { TrainLive } from '@/lib/types'
 import { TopBar } from './TopBar'
@@ -80,9 +80,17 @@ function useLiveTrains() {
 export function AppShell() {
   const { theme, t } = useApp()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Bumped each time a train is picked from search, so the map re-centers on it
+  // even if it's already the selected train (a plain id change wouldn't fire).
+  const [focusNonce, setFocusNonce] = useState(0)
 
   const { trains, sampledAt, receivedAt } = useLiveTrains()
   const selected = trains.find((tr) => tr.id === selectedId) ?? null
+
+  const focusTrain = useCallback((id: string) => {
+    setSelectedId(id)
+    setFocusNonce((n) => n + 1)
+  }, [])
 
   return (
     <main className="relative h-dvh w-screen overflow-hidden">
@@ -91,11 +99,12 @@ export function AppShell() {
         sampledAt={sampledAt}
         receivedAt={receivedAt}
         selectedId={selectedId}
+        focusNonce={focusNonce}
         theme={theme}
         onSelect={setSelectedId}
       />
 
-      <TopBar trainCount={trains.length} />
+      <TopBar trains={trains} onSelect={focusTrain} />
 
       {selected && (
         <TrainDetailsPanel train={selected} onClose={() => setSelectedId(null)} />

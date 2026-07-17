@@ -188,7 +188,8 @@ export function liveRailPositionAt(
   elapsedMs: number
 ): { position: LatLng; bearing: number } {
   const duration = Math.max(1, train.segmentDurationMs)
-  const progress = train.segmentProgress + Math.max(0, elapsedMs) / duration
+  const movingElapsed = Math.max(0, elapsedMs - train.segmentStartsInMs)
+  const progress = train.segmentProgress + movingElapsed / duration
   return pointAlong(getRailSegment(train, train.fromIndex, asset), progress)
 }
 

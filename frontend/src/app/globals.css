@@ -92,6 +92,26 @@ html.dark .glass {
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+/* Near-solid variant for the search field + its results, where the map showing
+   through the standard glass hurts legibility. */
+.glass-strong {
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 10px 30px -12px rgba(15, 23, 42, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+html.dark .glass-strong {
+  background: rgba(20, 27, 43, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 12px 34px -12px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
 /* ---------------------------------------------------------------------------
    Train markers (rendered as Leaflet divIcons)
 --------------------------------------------------------------------------- */

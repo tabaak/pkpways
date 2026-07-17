@@ -18,7 +18,7 @@ import { getCarrier } from '@/lib/carriers'
 import { routeCoords } from '@/lib/geo'
 import { liveRailPositionAt, loadRailGeometry, stitchedRoute, type RailGeometryAsset } from '@/lib/railGeometry'
 import { getTrainIdentity } from '@/lib/trainIdentity'
-import type { Theme, TrainLive } from '@/lib/types'
+import type { LatLng, Theme, TrainLive } from '@/lib/types'
 import { TRAIN_PATH } from './icons'
 
 const POLAND_CENTER: [number, number] = [52.1, 19.4]
@@ -236,6 +236,31 @@ function SelectedRoute({
   )
 }
 
+/** Pans/zooms the map to a train when it's picked from search. Keyed off a
+ *  nonce so re-selecting the same train still re-centers. */
+function MapFocus({
+  target,
+  nonce,
+  reducedMotion,
+}: {
+  target: LatLng | null
+  nonce: number
+  reducedMotion: boolean
+}) {
+  const map = useMap()
+  const lastNonce = useRef(0)
+
+  useEffect(() => {
+    if (nonce === 0 || nonce === lastNonce.current || !target) return
+    lastNonce.current = nonce
+    const zoom = Math.max(map.getZoom(), 9)
+    if (reducedMotion) map.setView([target.lat, target.lng], zoom)
+    else map.flyTo([target.lat, target.lng], zoom, { duration: 0.9 })
+  }, [nonce, target, reducedMotion, map])
+
+  return null
+}
+
 /** Reacts to theme change / mount to keep Leaflet sized correctly. */
 function MapEffects({ onBackgroundClick }: { onBackgroundClick: () => void }) {
   const map = useMap()
@@ -256,6 +281,7 @@ export default function MapView({
   sampledAt,
   receivedAt,
   selectedId,
+  focusNonce,
   theme,
   onSelect,
 }: {
@@ -263,6 +289,7 @@ export default function MapView({
   sampledAt: number
   receivedAt: number
   selectedId: string | null
+  focusNonce: number
   theme: Theme
   onSelect: (id: string | null) => void
 }) {
@@ -315,6 +342,11 @@ export default function MapView({
 
       <ZoomControl position="bottomright" />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
+      <MapFocus
+        target={selected ? selected.position : null}
+        nonce={focusNonce}
+        reducedMotion={reducedMotion}
+      />
 
       {selected && (
         <SelectedRoute

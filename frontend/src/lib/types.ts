@@ -74,6 +74,8 @@ export type TrainLive = Train & {
   segmentProgress: number
   /** Effective travel time for the current segment, used for client animation. */
   segmentDurationMs: number
+  /** Time to hold at the current station before advancing along the segment. */
+  segmentStartsInMs: number
   /** Index of the stop the train most recently left. */
   fromIndex: number
   /** Index of the stop the train is heading toward. */
