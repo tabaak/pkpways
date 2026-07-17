@@ -15,6 +15,7 @@ type RailSegment = LatLng[]
 let assetPromise: Promise<RailGeometryAsset | null> | null = null
 let loadedAsset: RailGeometryAsset | null = null
 const decoded = new Map<string, RailSegment>()
+const measurements = new WeakMap<RailSegment, { cumulative: number[]; total: number }>()
 
 /** Fetch the immutable-ish public asset once per browser session. */
 export function loadRailGeometry(): Promise<RailGeometryAsset | null> {
@@ -101,7 +102,6 @@ export function getRailSegment(
 
   const segmentKey = key(from.stationId, to.stationId)
   let encoded = asset.segments[segmentKey]
-  let cacheKey = segmentKey
   let reverse = false
   // The railway is bidirectional. Older/generated snapshots can contain only
   // the opposite direction for a pair, so reuse that geometry reversed rather
@@ -109,17 +109,16 @@ export function getRailSegment(
   if (!encoded) {
     const reverseKey = key(to.stationId, from.stationId)
     encoded = asset.segments[reverseKey]
-    cacheKey = reverseKey
     reverse = Boolean(encoded)
   }
   if (!encoded) return straightSegment(train, index)
-  const cached = decoded.get(cacheKey)
+  const cached = decoded.get(segmentKey)
   if (cached) return cached
   try {
     const points = decodePolyline(encoded)
     if (points.length >= 2) {
       const routed = reverse ? [...points].reverse() : points
-      decoded.set(cacheKey, routed)
+      decoded.set(segmentKey, routed)
       return routed
     }
   } catch {
@@ -140,31 +139,57 @@ function distanceMeters(a: LatLng, b: LatLng): number {
   return 2 * radius * Math.asin(Math.sqrt(h))
 }
 
+function measureSegment(segment: RailSegment): { cumulative: number[]; total: number } {
+  const cached = measurements.get(segment)
+  if (cached) return cached
+
+  const cumulative = [0]
+  for (let index = 1; index < segment.length; index += 1) {
+    cumulative.push(cumulative[index - 1] + distanceMeters(segment[index - 1], segment[index]))
+  }
+  const measured = { cumulative, total: cumulative.at(-1) ?? 0 }
+  measurements.set(segment, measured)
+  return measured
+}
+
 /** Point at fraction `t` along a segment's cumulative distance. */
 function pointAlong(segment: RailSegment, t: number): { position: LatLng; bearing: number } {
   if (segment.length < 2) return { position: segment[0] ?? { lat: 0, lng: 0 }, bearing: 0 }
-  const lengths = segment.slice(1).map((point, index) => distanceMeters(segment[index], point))
-  const total = lengths.reduce((sum, length) => sum + length, 0)
+  const { cumulative, total } = measureSegment(segment)
   if (total <= 0) return { position: segment[0], bearing: bearing(segment[0], segment.at(-1) ?? segment[0]) }
 
   const target = Math.min(1, Math.max(0, t)) * total
-  let travelled = 0
-  for (let index = 0; index < lengths.length; index += 1) {
-    const length = lengths[index]
-    if (target <= travelled + length || index === lengths.length - 1) {
-      const fraction = length > 0 ? (target - travelled) / length : 0
-      const from = segment[index]
-      const to = segment[index + 1]
-      return { position: lerp(from, to, fraction), bearing: bearing(from, to) }
-    }
-    travelled += length
+  let low = 1
+  let high = cumulative.length - 1
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (cumulative[middle] < target) low = middle + 1
+    else high = middle
   }
-  return { position: segment.at(-1) ?? segment[0], bearing: bearing(segment.at(-2) ?? segment[0], segment.at(-1) ?? segment[0]) }
+
+  const toIndex = low
+  const fromIndex = Math.max(0, toIndex - 1)
+  const from = segment[fromIndex]
+  const to = segment[toIndex]
+  const length = cumulative[toIndex] - cumulative[fromIndex]
+  const fraction = length > 0 ? (target - cumulative[fromIndex]) / length : 0
+  return { position: lerp(from, to, fraction), bearing: bearing(from, to) }
 }
 
 /** Render a live marker on the current routed segment. */
 export function liveRailPosition(train: TrainLive, asset: RailGeometryAsset | null): { position: LatLng; bearing: number } {
   return pointAlong(getRailSegment(train, train.fromIndex, asset), train.segmentProgress)
+}
+
+/** Advance a server snapshot in real time without waiting for the next poll. */
+export function liveRailPositionAt(
+  train: TrainLive,
+  asset: RailGeometryAsset | null,
+  elapsedMs: number
+): { position: LatLng; bearing: number } {
+  const duration = Math.max(1, train.segmentDurationMs)
+  const progress = train.segmentProgress + Math.max(0, elapsedMs) / duration
+  return pointAlong(getRailSegment(train, train.fromIndex, asset), progress)
 }
 
 /** Stitch every routed segment into one route line for the detail view. */

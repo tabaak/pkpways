@@ -52,7 +52,7 @@ export type RouteStop = {
 }
 
 export type Train = {
-  /** Stable id, "scheduleId:orderId". */
+  /** Stable run id, "scheduleId:orderId:operatingDate". */
   id: string
   /** e.g. "IC 3512". */
   number: string
@@ -72,6 +72,8 @@ export type TrainLive = Train & {
   bearing: number
   /** Time progress through the current station-to-station segment (0..1). */
   segmentProgress: number
+  /** Effective travel time for the current segment, used for client animation. */
+  segmentDurationMs: number
   /** Index of the stop the train most recently left. */
   fromIndex: number
   /** Index of the stop the train is heading toward. */

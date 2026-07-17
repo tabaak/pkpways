@@ -190,6 +190,14 @@ html.dark .train-marker__body {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .train-marker,
+  .train-marker--selected::after {
+    transition: none;
+    animation: none;
+  }
+}
+
 /* Small delay badge on the marker. */
 .train-marker__delay {
   position: absolute;

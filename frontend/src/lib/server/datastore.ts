@@ -33,10 +33,6 @@ function redis(): Redis {
   return g._pkpRedis
 }
 
-// Cap on markers returned to the browser. The national fleet is far too many to
-// render at once; this keeps Leaflet responsive. Raise/lower via env.
-const MAX_TRAINS = Number(process.env.MAX_TRAINS ?? 1500)
-
 // --------------------------------------------------------------------------- //
 // Reference-data caches (stations + train identity change slowly)
 // --------------------------------------------------------------------------- //
@@ -138,6 +134,7 @@ type RawStop = {
 type RawTrain = {
   scheduleId: number
   orderId: number
+  operatingDate: string
   trainStatus?: string
   stations?: RawStop[]
 }
@@ -164,7 +161,8 @@ function toLive(
   identities: Map<string, IdentityRow>,
   now: number
 ): TrainLive | null {
-  const id = `${raw.scheduleId}:${raw.orderId}`
+  const identityId = `${raw.scheduleId}:${raw.orderId}`
+  const id = `${identityId}:${raw.operatingDate.slice(0, 10)}`
   const rawStops = raw.stations ?? []
 
   // Keep only stops whose station we can place on the map, but carry the raw
@@ -207,7 +205,7 @@ function toLive(
     const from = located[i].stop
     const to = located[i + 1].stop
     const position = lerp(from, to, t)
-    const identity = identities.get(id)
+    const identity = identities.get(identityId)
     return {
       id,
       number: identity?.number || id,
@@ -218,6 +216,7 @@ function toLive(
       position,
       bearing: bearing(from, to),
       segmentProgress: t,
+      segmentDurationMs: reach - leave,
       fromIndex: i,
       toIndex: i + 1,
       // "Current" delay = delay at the stop being approached.
@@ -230,7 +229,8 @@ function toLive(
 // --------------------------------------------------------------------------- //
 // Public API — with a short memo so bursts of polls don't recompute
 // --------------------------------------------------------------------------- //
-let liveCache: RefCache<TrainLive[]> | null = null
+type LiveCache = RefCache<TrainLive[]> & { sampledAt: number }
+let liveCache: LiveCache | null = null
 const LIVE_TTL_MS = 8_000
 
 export async function getLiveTrains(): Promise<TrainLive[]> {
@@ -239,14 +239,20 @@ export async function getLiveTrains(): Promise<TrainLive[]> {
   const r = redis()
   const indexJson = await r.get('operations:index')
   if (!indexJson) {
-    liveCache = { data: [], at: Date.now() }
+    const sampledAt = Date.now()
+    liveCache = { data: [], at: sampledAt, sampledAt }
     return []
   }
   const runKeys: string[] = JSON.parse(indexJson)
-  if (runKeys.length === 0) return []
+  if (runKeys.length === 0) {
+    const sampledAt = Date.now()
+    liveCache = { data: [], at: sampledAt, sampledAt }
+    return []
+  }
 
   const [stations, identities] = await Promise.all([getStations(), getIdentities()])
 
+  const sampledAt = Date.now()
   const now = warsawNowMs()
   const live: TrainLive[] = []
   // MGET in batches to avoid one enormous command / reply.
@@ -265,10 +271,14 @@ export async function getLiveTrains(): Promise<TrainLive[]> {
       const snapshot = toLive(raw, stations, identities, now)
       if (snapshot) live.push(snapshot)
     }
-    if (live.length >= MAX_TRAINS) break
   }
 
-  const capped = live.slice(0, MAX_TRAINS)
-  liveCache = { data: capped, at: Date.now() }
-  return capped
+  liveCache = { data: live, at: Date.now(), sampledAt }
+  return live
+}
+
+/** Return trains together with the instant their interpolated positions were sampled. */
+export async function getLiveTrainSnapshot(): Promise<{ trains: TrainLive[]; sampledAt: number }> {
+  const trains = await getLiveTrains()
+  return { trains, sampledAt: liveCache?.sampledAt ?? Date.now() }
 }

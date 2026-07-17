@@ -33,7 +33,15 @@ const POLL_INTERVAL_MS = 15_000
 
 /** Fetches live trains from the API on an interval. */
 function useLiveTrains() {
-  const [trains, setTrains] = useState<TrainLive[]>([])
+  const [snapshot, setSnapshot] = useState<{
+    trains: TrainLive[]
+    sampledAt: number
+    receivedAt: number
+  }>({
+    trains: [],
+    sampledAt: 0,
+    receivedAt: 0,
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -43,8 +51,15 @@ function useLiveTrains() {
       try {
         const res = await fetch('/api/trains', { signal: controller.signal })
         if (!res.ok) return
-        const data = (await res.json()) as { trains: TrainLive[] }
-        if (!cancelled) setTrains(data.trains)
+        const data = (await res.json()) as { trains: TrainLive[]; at: string }
+        const sampledAt = Date.parse(data.at)
+        if (!cancelled) {
+          setSnapshot({
+            trains: data.trains,
+            sampledAt: Number.isFinite(sampledAt) ? sampledAt : Date.now(),
+            receivedAt: Date.now(),
+          })
+        }
       } catch {
         /* transient fetch/abort error — keep the last good set */
       }
@@ -59,20 +74,22 @@ function useLiveTrains() {
     }
   }, [])
 
-  return trains
+  return snapshot
 }
 
 export function AppShell() {
   const { theme, t } = useApp()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const trains = useLiveTrains()
+  const { trains, sampledAt, receivedAt } = useLiveTrains()
   const selected = trains.find((tr) => tr.id === selectedId) ?? null
 
   return (
     <main className="relative h-dvh w-screen overflow-hidden">
       <MapView
         trains={trains}
+        sampledAt={sampledAt}
+        receivedAt={receivedAt}
         selectedId={selectedId}
         theme={theme}
         onSelect={setSelectedId}

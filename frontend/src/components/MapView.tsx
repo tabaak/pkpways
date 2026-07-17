@@ -16,7 +16,7 @@ import {
 } from 'react-leaflet'
 import { getCarrier } from '@/lib/carriers'
 import { routeCoords } from '@/lib/geo'
-import { liveRailPosition, loadRailGeometry, stitchedRoute, type RailGeometryAsset } from '@/lib/railGeometry'
+import { liveRailPositionAt, loadRailGeometry, stitchedRoute, type RailGeometryAsset } from '@/lib/railGeometry'
 import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { Theme, TrainLive } from '@/lib/types'
 import { TRAIN_PATH } from './icons'
@@ -41,6 +41,43 @@ const TILES: Record<Theme, { url: string; attribution: string }> = {
 }
 
 const TRAIN_SVG = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="${TRAIN_PATH}"/></svg>`
+
+const FRAME_INTERVAL_MS = 50
+const frameListeners = new Set<() => void>()
+let frameRequest: number | null = null
+let previousFrame = 0
+
+function runAnimationFrame(now: number) {
+  if (now - previousFrame >= FRAME_INTERVAL_MS) {
+    previousFrame = now
+    frameListeners.forEach((listener) => listener())
+  }
+  frameRequest = frameListeners.size > 0 ? window.requestAnimationFrame(runAnimationFrame) : null
+}
+
+function subscribeToAnimationFrame(listener: () => void): () => void {
+  frameListeners.add(listener)
+  if (frameRequest == null) frameRequest = window.requestAnimationFrame(runAnimationFrame)
+  return () => {
+    frameListeners.delete(listener)
+    if (frameListeners.size === 0 && frameRequest != null) {
+      window.cancelAnimationFrame(frameRequest)
+      frameRequest = null
+    }
+  }
+}
+
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false)
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const update = () => setReduced(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return reduced
+}
 
 function buildTrainIcon(
   color: string,
@@ -68,11 +105,17 @@ function buildTrainIcon(
 function TrainMarker({
   train,
   railGeometry,
+  sampledAt,
+  receivedAt,
+  reducedMotion,
   selected,
   onSelect,
 }: {
   train: TrainLive
   railGeometry: RailGeometryAsset | null
+  sampledAt: number
+  receivedAt: number
+  reducedMotion: boolean
   selected: boolean
   onSelect: (id: string) => void
 }) {
@@ -83,13 +126,34 @@ function TrainMarker({
     .join(', ')
   const markerRef = useRef<L.Marker>(null)
   const rendered = useMemo(
-    () => (railGeometry ? liveRailPosition(train, railGeometry) : train),
-    [railGeometry, train]
+    () => liveRailPositionAt(train, railGeometry, receivedAt - sampledAt),
+    [railGeometry, receivedAt, sampledAt, train]
   )
 
   useEffect(() => {
     markerRef.current?.getElement()?.setAttribute('aria-label', accessibleLabel)
   }, [accessibleLabel])
+
+  useEffect(() => {
+    const marker = markerRef.current
+    if (!marker) return
+
+    let lastBearing = Number.NaN
+    const updatePosition = () => {
+      const next = liveRailPositionAt(train, railGeometry, Date.now() - sampledAt)
+      marker.setLatLng([next.position.lat, next.position.lng])
+      const rounded = Math.round(next.bearing / 2) * 2
+      if (rounded !== lastBearing) {
+        const pointer = marker.getElement()?.querySelector<HTMLElement>('.train-marker__dir')
+        if (pointer) pointer.style.transform = `rotate(${rounded}deg)`
+        lastBearing = rounded
+      }
+    }
+
+    updatePosition()
+    if (reducedMotion) return
+    return subscribeToAnimationFrame(updatePosition)
+  }, [railGeometry, reducedMotion, sampledAt, train])
   // Round the heading so the icon only rebuilds on a meaningful turn.
   const roundedBearing = Math.round(rendered.bearing / 5) * 5
 
@@ -189,16 +253,21 @@ function MapEffects({ onBackgroundClick }: { onBackgroundClick: () => void }) {
 
 export default function MapView({
   trains,
+  sampledAt,
+  receivedAt,
   selectedId,
   theme,
   onSelect,
 }: {
   trains: TrainLive[]
+  sampledAt: number
+  receivedAt: number
   selectedId: string | null
   theme: Theme
   onSelect: (id: string | null) => void
 }) {
   const tiles = TILES[theme]
+  const reducedMotion = useReducedMotion()
   const selected = trains.find((t) => t.id === selectedId) ?? null
   const [railGeometry, setRailGeometry] = useState<RailGeometryAsset | null>(null)
   const [railGeometryLoading, setRailGeometryLoading] = useState(true)
@@ -255,11 +324,14 @@ export default function MapView({
         />
       )}
 
-      {trains.map((train) => (
+      {(selected ? [selected] : trains).map((train) => (
         <TrainMarker
           key={train.id}
           train={train}
           railGeometry={railGeometry}
+          sampledAt={sampledAt}
+          receivedAt={receivedAt}
+          reducedMotion={reducedMotion}
           selected={train.id === selectedId}
           onSelect={onSelect}
         />

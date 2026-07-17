@@ -114,7 +114,7 @@ result. The worker replaces the index only after a complete cache write.
 
 > ⚠️ **The cache key MUST include `operatingDate`.** `(scheduleId, orderId)` looks unique but is not — it's only a primary key in `train_runs` *together with* `operating_date`, because `/operations` returns a rolling ~7-day window in which the same pair recurs on multiple dates. The key originally omitted the date, so **21,746 of 39,839 trains silently overwrote each other**, and the survivor for a given key was an arbitrary date (often days stale). The read layer then correctly rejected almost all of them as "past their last arrival" — the map rendered nothing while the worker logged perfect health.
 
-> ⚠️ **Only current runs are cached.** The worker keeps just `operatingDate ∈ {yesterday, today, tomorrow}` (Warsaw) — yesterday for overnight runs still in flight, tomorrow for ones departing just after midnight. Caching the full 7-day window meant ~40k keys / ~313 MB, and since the read layer must deserialise a record to discover the run is long finished, a full read took **~100 s** — far past the client's poll timeout, so the request never returned. Filtering to ~14.7k current runs also lets the `MAX_TRAINS` early-exit actually fire.
+> ⚠️ **Only current runs are cached.** The worker keeps just `operatingDate ∈ {yesterday, today, tomorrow}` (Warsaw) — yesterday for overnight runs still in flight, tomorrow for ones departing just after midnight. Caching the full 7-day window meant ~40k keys / ~313 MB, and since the read layer must deserialise a record to discover the run is long finished, a full read took **~100 s** — far past the client's poll timeout, so the request never returned.
 
 > ⚠️ **The TTL must comfortably outlive a full poll cycle** — this is a trap worth understanding. It used to be `POLL_INTERVAL_SECONDS × 3` (= 90s), which was fine when the worker burst-paginated and finished in seconds. Once rate-limit handling added an inter-page delay, a cycle grew past 90s and **every batch of keys expired before its replacement was written** — Redis sat empty for most of each cycle and the map rendered nothing, while the worker looked perfectly healthy. The TTL is now independent of the poll interval and generous by default. Stale entries are harmless: each one carries its full route, and the read layer drops any train past its last arrival, so an old key self-filters rather than showing a ghost train. The TTL exists only to evict trains the API stops reporting.
 
@@ -258,10 +258,15 @@ The core challenge: **the API gives station-level arrival/departure times and de
 1. Take the train's stops from its cached `/operations` object, keeping only stops whose station has coordinates (a train needs ≥2 to be placeable).
 2. Compute each stop's **effective** times: `actual ?? planned + delayMinutes`.
 3. Find the segment where *now* falls between one stop's effective departure and the next stop's effective arrival. A train before its first departure or past its last arrival returns `null` — so **only en-route trains are rendered**.
-4. Compute time progress `t` through that segment. The server keeps the
-   straight-line position as a safe fallback, while the browser places the
-   marker at the same `t` along the pair's routed geometry using cumulative
-   distance.
+4. Compute time progress `t` and the effective segment duration
+   (`reach - leave`). The API returns both as `segmentProgress` and
+   `segmentDurationMs`, together with the instant at which the snapshot was
+   sampled.
+5. The browser advances `t` continuously from that sampled instant and places
+   the marker by cumulative distance along the routed railway geometry. Fresh
+   15-second snapshots correct the position without making movement depend on
+   the polling cadence. Straight station-to-station interpolation remains the
+   fallback when geometry is unavailable.
 
 **Timezone handling:** API timestamps are naive (no offset) and mean Europe/Warsaw. Rather than convert, both the stop times and "now" are compared in the same **pseudo-UTC frame** — the wall-clock digits are read as if they were UTC, and `warsawNowMs()` derives the current time the same way. Two wrongs cancel; the comparison is correct and DST-safe.
 
@@ -349,7 +354,6 @@ docker compose exec postgres psql -U pkpways -d pkpways -c \
 | `CACHE_TTL_SECONDS` | data-sync | default `1800` — Redis key TTL. **Must outlive a full poll cycle** (see [Redis cache layout](#redis-cache-layout)) |
 | `REQUEST_TIMEOUT_SECONDS`, `LOG_LEVEL` | data-sync | optional |
 | `DATABASE_URL`, `REDIS_URL` | frontend | in `frontend/.env.local` for local dev (via SSH tunnel) |
-| `MAX_TRAINS` | frontend | default `1500` — cap on markers sent to the browser |
 
 > **Running the worker standalone (without Docker)** is also supported: it reads `data-sync/.env` and needs `DATABASE_URL` + `REDIS_URL` pointing at `localhost`. In the Compose setup this file is unused — the root `.env` is the single source of truth.
 
@@ -376,7 +380,16 @@ The app reads live data from Redis/Postgres (never the PKP API directly).
   station hops with routed railway geometry; missing or flagged pairs remain
   straight-line fallbacks. Keeping the asset in the frontend bundle prevents a
   static-file request or cache failure from degrading every route to chords.
-- Caps output at **`MAX_TRAINS`** (default 1500) — the full ~40k fleet can't be rendered on Leaflet.
+- A single shared `requestAnimationFrame` loop advances every marker at about
+  20 FPS between API snapshots. Decoded segment distances are cached and the
+  current point is found with binary search, avoiding repeated full-polyline
+  calculations for hundreds of trains.
+- `prefers-reduced-motion: reduce` disables continuous movement and the selected
+  marker pulse; those users receive discrete positions when a snapshot arrives.
+- Scans every current Redis record and returns every train that is en route and
+  has at least two located stations. The rolling ~34–40k Postgres dataset is not
+  sent to the browser; finished, not-yet-started, and unmappable runs are
+  filtered out first.
 
 `pg.Pool` and `ioredis` clients are singletons pinned to `globalThis` so hot-reload doesn't leak connections.
 
@@ -384,7 +397,11 @@ Stops ship with their `name`/`lat`/`lng` embedded, so the **browser needs no sta
 
 ### API
 
-`GET /api/trains` → `{ trains, count, at }` (`runtime = 'nodejs'`, `force-dynamic`, `Cache-Control: no-store`). `AppShell` polls it every 15s.
+`GET /api/trains` → `{ trains, count, at }` (`runtime = 'nodejs'`,
+`force-dynamic`, `Cache-Control: no-store`). `at` is the time the interpolated
+positions were sampled—not merely the HTTP response time—and each train carries
+`segmentProgress` plus `segmentDurationMs`. `AppShell` polls every 15 seconds;
+the animation loop fills the interval between polls.
 
 ### Running it locally
 
@@ -424,10 +441,10 @@ This is a **portfolio piece** — the design should be stunning:
 
 Open items, roughly by how much they'd bite:
 
-- **The frontend train `id` is `scheduleId:orderId`** — which, per the [schema note](#train_runs--live-runs-hot-path), is not unique across operating dates. Two runs of the same train (e.g. an overnight service and its next-day counterpart, both in flight) would collide on the same React key. The Redis key is now date-qualified; this one isn't yet.
 - **Cached records are fat (~8.1 KB each).** Each keeps `plannedSequenceNumber`, `actualSequenceNumber`, `isConfirmed` and other fields the map never reads. Slimming the cached shape would cut memory and read time several-fold.
-- **No sub-poll animation.** Markers jump on each 15s poll rather than gliding — position is recomputed per fetch, not tweened between them.
-- **No viewport culling or clustering.** The map relies on the blunt `MAX_TRAINS` cap (default 1500) rather than rendering what's actually in view.
+- **Client animation is schedule-derived, not GPS.** Between 15s API polls, markers advance smoothly along the current routed segment using its effective travel duration. A fresh poll corrects the snapshot, but the underlying position remains an interpolation of timetable and delay data.
+- **No viewport culling or clustering.** Every currently moving, placeable train
+  is rendered, so marker cost grows with the number of simultaneous runs.
 - **The full route ships with every marker.** Only the *selected* train needs its route; splitting that into `/api/trains/[id]` would shrink the payload substantially.
 
 ---
