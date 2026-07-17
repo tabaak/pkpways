@@ -199,7 +199,10 @@ function toLive(
     const identity = identities.get(identityId)
     return {
       id,
-      number: identity?.number || id,
+      // Never fall back to the internal composite run id (`schedule:order:date`)
+      // as a user-facing label — trains missing a /schedules identity render a
+      // neutral placeholder instead. See getTrainIdentity.
+      number: identity?.number || '',
       name: identity?.name || undefined,
       category: identity?.category || undefined,
       carrierId: identity?.carrierId ?? 'OTHER',

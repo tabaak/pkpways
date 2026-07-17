@@ -200,6 +200,14 @@ function SelectedRoute({
   railGeometry: RailGeometryAsset | null
   loading: boolean
 }) {
+  // Labels are noisy when zoomed out, so reveal them progressively: endpoints
+  // first, then every intermediate stop once the user is zoomed in close.
+  const map = useMap()
+  const [zoom, setZoom] = useState(() => map.getZoom())
+  useMapEvents({ zoomend: () => setZoom(map.getZoom()) })
+  const showEndpointLabels = zoom >= 8
+  const showAllLabels = zoom >= 11
+
   // Do not draw misleading station-to-station chords while the static railway
   // geometry is being fetched. The route appears as soon as it is ready.
   if (loading) return null
@@ -219,19 +227,35 @@ function SelectedRoute({
         positions={positions}
         pathOptions={{ color: carrier.color, weight: 3.5, opacity: 0.95 }}
       />
-      {coords.map((c, i) => (
-        <CircleMarker
-          key={train.stops[i].stationId}
-          center={[c.lat, c.lng]}
-          radius={i === 0 || i === coords.length - 1 ? 5 : 3.5}
-          pathOptions={{
-            color: '#ffffff',
-            weight: 2,
-            fillColor: carrier.color,
-            fillOpacity: 1,
-          }}
-        />
-      ))}
+      {coords.map((c, i) => {
+        const isEndpoint = i === 0 || i === coords.length - 1
+        const showLabel = isEndpoint ? showEndpointLabels : showAllLabels
+        return (
+          <CircleMarker
+            key={train.stops[i].stationId}
+            center={[c.lat, c.lng]}
+            radius={isEndpoint ? 5 : 3.5}
+            pathOptions={{
+              color: '#ffffff',
+              weight: 2,
+              fillColor: carrier.color,
+              fillOpacity: 1,
+            }}
+          >
+            {showLabel && (
+              <Tooltip
+                permanent
+                interactive={false}
+                direction="top"
+                offset={[0, isEndpoint ? -6 : -5]}
+                className={`station-label${isEndpoint ? ' station-label--endpoint' : ''}`}
+              >
+                {train.stops[i].name}
+              </Tooltip>
+            )}
+          </CircleMarker>
+        )
+      })}
     </>
   )
 }

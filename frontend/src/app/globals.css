@@ -263,6 +263,68 @@ html.dark .leaflet-tooltip-top.train-tooltip::before {
 }
 
 /* ---------------------------------------------------------------------------
+   Route station labels (shown for the selected train)
+
+   Low-emphasis labels: no box, no arrow — just softly-legible text that rides
+   on top of the map. A subtle halo keeps them readable on light and dark
+   tiles without shouting over the route line.
+--------------------------------------------------------------------------- */
+.leaflet-tooltip.station-label {
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgba(15, 23, 42, 0.62);
+  text-shadow:
+    0 0 2px rgba(255, 255, 255, 0.95),
+    0 0 6px rgba(255, 255, 255, 0.85),
+    0 1px 2px rgba(255, 255, 255, 0.9);
+  transition: opacity 200ms ease;
+}
+
+.leaflet-tooltip.station-label--endpoint {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.82);
+}
+
+html.dark .leaflet-tooltip.station-label {
+  color: rgba(226, 232, 240, 0.6);
+  text-shadow:
+    0 0 2px rgba(2, 6, 23, 0.95),
+    0 0 6px rgba(2, 6, 23, 0.85),
+    0 1px 2px rgba(2, 6, 23, 0.9);
+}
+
+html.dark .leaflet-tooltip.station-label--endpoint {
+  color: rgba(241, 245, 249, 0.9);
+}
+
+/* Leaflet draws a directional arrow on tooltips; hide it for these labels
+   regardless of which side it renders on. */
+.leaflet-tooltip.station-label::before,
+.leaflet-tooltip-top.station-label::before,
+.leaflet-tooltip-bottom.station-label::before,
+.leaflet-tooltip-left.station-label::before,
+.leaflet-tooltip-right.station-label::before {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .leaflet-tooltip.station-label {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
    Panel slide-in animation
 --------------------------------------------------------------------------- */
 @keyframes panel-in {
