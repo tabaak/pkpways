@@ -272,16 +272,20 @@ class Storage:
 
     # --- trains ---------------------------------------------------------- #
     def upsert_trains(self, routes: list[dict[str, Any]]) -> int:
+        # Keyed by trainOrderId, NOT orderId: orderId is a per-operating-date
+        # instance id that rotates daily, while trainOrderId is the stable train
+        # identity. Keying on orderId only matched runs on the exact day the
+        # schedule was captured, so most live trains missed their identity.
         rows = []
         for r in routes:
             schedule_id = r.get("scheduleId")
-            order_id = r.get("orderId")
-            if schedule_id is None or order_id is None:
+            train_order_id = r.get("trainOrderId")
+            if schedule_id is None or train_order_id is None:
                 continue
             rows.append(
                 (
                     int(schedule_id),
-                    int(order_id),
+                    int(train_order_id),
                     r.get("nationalNumber"),             # number   e.g. "99216"
                     r.get("name"),                       # name     e.g. an IC service name
                     r.get("commercialCategorySymbol"),  # category e.g. "S1", "R7"
@@ -295,9 +299,9 @@ class Storage:
                 cur,
                 """
                 INSERT INTO trains
-                    (schedule_id, order_id, number, name, type, carrier_code)
+                    (schedule_id, train_order_id, number, name, type, carrier_code)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (schedule_id, order_id)
+                ON CONFLICT (schedule_id, train_order_id)
                 DO UPDATE SET number       = EXCLUDED.number,
                               name         = EXCLUDED.name,
                               type         = EXCLUDED.type,

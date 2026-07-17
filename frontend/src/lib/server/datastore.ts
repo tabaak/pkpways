@@ -68,11 +68,12 @@ async function getStations(): Promise<Map<number, StationRow>> {
 async function getIdentities(): Promise<Map<string, IdentityRow>> {
   if (identityCache && Date.now() - identityCache.at < REF_TTL_MS) return identityCache.data
   const { rows } = await pool().query(
-    `SELECT schedule_id, order_id, number, name, type, carrier_code FROM trains`
+    `SELECT schedule_id, train_order_id, number, name, type, carrier_code FROM trains`
   )
   const map = new Map<string, IdentityRow>()
   for (const r of rows) {
-    map.set(`${r.schedule_id}:${r.order_id}`, {
+    // Keyed by trainOrderId (stable), matched against operations.trainOrderId.
+    map.set(`${r.schedule_id}:${r.train_order_id}`, {
       number: r.number ?? '',
       name: r.name,
       category: r.type,
@@ -134,6 +135,8 @@ type RawStop = {
 type RawTrain = {
   scheduleId: number
   orderId: number
+  /** Stable train identity id (constant across operating dates); the identity join key. */
+  trainOrderId: number
   operatingDate: string
   trainStatus?: string
   stations?: RawStop[]
@@ -161,8 +164,10 @@ function toLive(
   identities: Map<string, IdentityRow>,
   now: number
 ): TrainLive | null {
-  const identityId = `${raw.scheduleId}:${raw.orderId}`
-  const id = `${identityId}:${raw.operatingDate.slice(0, 10)}`
+  // Run id (unique per operating date) keys the run itself; identity is looked
+  // up by trainOrderId, which is stable across dates. See getIdentities.
+  const id = `${raw.scheduleId}:${raw.orderId}:${raw.operatingDate.slice(0, 10)}`
+  const identityId = `${raw.scheduleId}:${raw.trainOrderId}`
   const rawStops = raw.stations ?? []
 
   // Keep only stops whose station we can place on the map, but carry the raw

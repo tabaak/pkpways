@@ -33,17 +33,23 @@ CREATE TABLE IF NOT EXISTS stations (
 );
 
 -- (2) Train identity — number, name, carrier, category. NOT in /operations, so
--- this is fed from /schedules once/day. Keyed by (scheduleId, orderId),
--- date-independent.
+-- this is fed from /schedules once/day. Keyed by (scheduleId, trainOrderId).
+--
+-- IMPORTANT: identity is keyed by trainOrderId, NOT orderId. Both /operations
+-- and /schedules expose both ids, but orderId is a PER-OPERATING-DATE instance
+-- id (it rotates every day), whereas trainOrderId is the STABLE train identity
+-- that stays constant across operating dates. Keying on orderId only matched a
+-- run whose /schedules row happened to be captured on that exact day, so ~10%
+-- of live trains missed their identity and rendered the raw run id instead.
 CREATE TABLE IF NOT EXISTS trains (
-    schedule_id   INTEGER NOT NULL,
-    order_id      INTEGER NOT NULL,
-    number        VARCHAR(30),      -- nationalNumber, e.g. "99216"
-    name          VARCHAR(200),     -- optional service name from /schedules
-    type          VARCHAR(30),      -- commercialCategorySymbol, e.g. "S2", "IC"
-    carrier_code  TEXT,             -- "KM","SKM","PKP INTERCITY",... drives marker color + carrier filter
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (schedule_id, order_id)
+    schedule_id     INTEGER NOT NULL,
+    train_order_id  INTEGER NOT NULL,  -- trainOrderId: stable across operating dates
+    number          VARCHAR(30),       -- nationalNumber, e.g. "99216"
+    name            VARCHAR(200),      -- optional service name from /schedules
+    type            VARCHAR(30),       -- commercialCategorySymbol, e.g. "S2", "IC"
+    carrier_code    TEXT,              -- "KM","SKM","PKP INTERCITY",... drives marker color + carrier filter
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (schedule_id, train_order_id)
 );
 
 -- (3) Live runs — the /operations payload, whole route as JSONB, upserted each
@@ -79,13 +85,15 @@ COMMIT;
 --   WHERE train_runs.train_status IS DISTINCT FROM EXCLUDED.train_status
 --      OR train_runs.stops        IS DISTINCT FROM EXCLUDED.stops;
 --
--- List active trains (with labels):
---   SELECT r.schedule_id, r.order_id, t.number, t.carrier_code, r.train_status, r.stops
---   FROM train_runs r
---   LEFT JOIN trains t USING (schedule_id, order_id)
---   WHERE r.operating_date = CURRENT_DATE
---     AND r.train_status = 'C'
---   ORDER BY t.carrier_code, t.number;
+-- List active trains: `trains` identity is keyed by trainOrderId, but train_runs
+-- stores only the per-day orderId, so there is no direct SQL join key here. The
+-- runtime read layer performs the join in the app: it reads each run's
+-- trainOrderId from the cached /operations JSON in Redis and looks it up against
+-- the trains map. (A pure-SQL join would require carrying trainOrderId into
+-- train_runs as its own column.)
+--   SELECT schedule_id, order_id, train_status, stops
+--   FROM train_runs
+--   WHERE operating_date = CURRENT_DATE AND train_status = 'C';
 --
 -- Daily prune (live-only retention):
 --   DELETE FROM train_runs WHERE operating_date < CURRENT_DATE - 1;

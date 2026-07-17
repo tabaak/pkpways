@@ -15,13 +15,26 @@ export type Station = LatLng & {
 }
 
 export type CarrierId =
-  | 'IC'
-  | 'EIP'
-  | 'POL'
-  | 'KM'
-  | 'SKM'
-  | 'KD'
-  | 'KS'
+  | 'IC' // PKP Intercity
+  | 'EIP' // PKP Intercity Premium (Pendolino) — a service category, not a carrier
+  | 'POL' // Polregio (API code "PR")
+  | 'KM' // Koleje Mazowieckie
+  | 'SKM' // Szybka Kolej Miejska (Warszawa)
+  | 'SKMT' // PKP SKM w Trójmieście (API codes "SKMT" / "SKM_3M")
+  | 'KD' // Koleje Dolnośląskie
+  | 'KS' // Koleje Śląskie
+  | 'KML' // Koleje Małopolskie (API codes "KMŁ" / "20")
+  | 'KW' // Koleje Wielkopolskie
+  | 'LKA' // Łódzka Kolej Aglomeracyjna (API code "ŁKA")
+  | 'WKD' // Warszawska Kolej Dojazdowa
+  | 'ARRIVA' // Arriva RP (API code "AR")
+  | 'LEO' // Leo Express
+  | 'RJ' // RegioJet
+  | 'RP' // Railpolonia
+  | 'ODEG' // Ostdeutsche Eisenbahn
+  | 'CARGO' // PKP Cargo (freight)
+  | 'SKPL' // SKPL Cargo
+  | 'PARWOL' // Parowozownia Wolsztyn (heritage steam)
   /** Any carrier we don't brand explicitly (rendered neutral grey). */
   | 'OTHER'
 
