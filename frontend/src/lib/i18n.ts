@@ -35,6 +35,10 @@ const DICT = {
     pl: 'Brak danych o pociągach na żywo',
     en: 'No live train data yet',
   },
+  loadingTrains: {
+    pl: 'Ładowanie pociągów na żywo',
+    en: 'Loading live trains',
+  },
   searchLabel: { pl: 'Szukaj pociągu', en: 'Search train' },
   searchPlaceholder: {
     pl: 'Szukaj numeru pociągu…',

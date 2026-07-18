@@ -104,13 +104,22 @@ Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (wa
 
 | Key | Value | TTL |
 |-----|-------|-----|
-| `operation:<scheduleId>:<orderId>:<operatingDate>` | one train's full `/operations` object (JSON) | `CACHE_TTL_SECONDS` (default 1800) |
+| `operation:<scheduleId>:<orderId>:<operatingDate>` | one train's `/operations` object (JSON), **slimmed** to the fields the read layer uses (see below) | `CACHE_TTL_SECONDS` (default 1800) |
 | `operations:index` | JSON array of all cached `<scheduleId>:<orderId>:<operatingDate>` keys | none |
 
 The index is deliberately non-expiring, while every referenced operation value
 has a TTL. This protects the index from Redis's `volatile-lfu` eviction policy;
 if a value expires or is evicted, the read layer simply skips that missing MGET
 result. The worker replaces the index only after a complete cache write.
+
+**Cached values are slimmed before writing.** Each stop in the `/operations`
+object carries fields the map never reads — `plannedSequenceNumber`,
+`actualSequenceNumber`, and `plannedArrivalTime`/`plannedDepartureTime` (pure
+HH:MM duplicates of the ISO `*Arrival`/`*Departure` values). `data-sync` strips
+those (keeping the timing/delay fields the read layer uses, plus the cheap
+`isConfirmed`/`isCancelled` status booleans) before caching, cutting the fleet
+payload ~39% (~62 MB → ~38 MB) and the frontend's cold read. The durable
+`train_runs.stops` column in Postgres keeps the full verbatim route.
 
 > ⚠️ **The cache key MUST include `operatingDate`.** `(scheduleId, orderId)` looks unique but is not — it's only a primary key in `train_runs` *together with* `operating_date`, because `/operations` returns a rolling ~7-day window in which the same pair recurs on multiple dates. The key originally omitted the date, so **21,746 of 39,839 trains silently overwrote each other**, and the survivor for a given key was an arbitrary date (often days stale). The read layer then correctly rejected almost all of them as "past their last arrival" — the map rendered nothing while the worker logged perfect health.
 
@@ -469,7 +478,6 @@ This is a **portfolio piece** — the design should be stunning:
 
 Open items, roughly by how much they'd bite:
 
-- **Cached records are fat (~8.1 KB each).** Each keeps `plannedSequenceNumber`, `actualSequenceNumber`, `isConfirmed` and other fields the map never reads. Slimming the cached shape would cut memory and read time several-fold.
 - **Client animation is schedule-derived, not GPS.** Between 15s API polls, markers advance smoothly along the current routed segment using its effective travel duration. A fresh poll corrects the snapshot, but the underlying position remains an interpolation of timetable and delay data.
 - **No viewport culling or clustering.** With no selection, every active,
   placeable train is rendered, so marker cost grows with the number of

@@ -37,10 +37,12 @@ function useLiveTrains() {
     trains: TrainLive[]
     sampledAt: number
     receivedAt: number
+    loading: boolean
   }>({
     trains: [],
     sampledAt: 0,
     receivedAt: 0,
+    loading: true,
   })
 
   useEffect(() => {
@@ -58,6 +60,7 @@ function useLiveTrains() {
             trains: data.trains,
             sampledAt: Number.isFinite(sampledAt) ? sampledAt : Date.now(),
             receivedAt: Date.now(),
+            loading: false,
           })
         }
       } catch {
@@ -84,7 +87,7 @@ export function AppShell() {
   // even if it's already the selected train (a plain id change wouldn't fire).
   const [focusNonce, setFocusNonce] = useState(0)
 
-  const { trains, sampledAt, receivedAt } = useLiveTrains()
+  const { trains, sampledAt, receivedAt, loading } = useLiveTrains()
   const selected = trains.find((tr) => tr.id === selectedId) ?? null
 
   const focusTrain = useCallback((id: string) => {
@@ -119,8 +122,22 @@ export function AppShell() {
       {!selected && (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 z-[1050] flex justify-center px-4">
           <div className="glass pointer-events-auto flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium text-slate-600 shadow-lg dark:text-slate-300">
-            <TrainGlyph className="h-4 w-4 opacity-60" />
-            {trains.length === 0 ? t('noLiveData') : t('selectHint')}
+            {loading ? (
+              <span
+                role="status"
+                aria-label={t('loadingTrains')}
+                className="flex h-4 items-center gap-1.5"
+              >
+                <span aria-hidden="true" className="loading-dot h-1.5 w-1.5 rounded-full bg-current" />
+                <span aria-hidden="true" className="loading-dot h-1.5 w-1.5 rounded-full bg-current" />
+                <span aria-hidden="true" className="loading-dot h-1.5 w-1.5 rounded-full bg-current" />
+              </span>
+            ) : (
+              <>
+                <TrainGlyph className="h-4 w-4 opacity-60" />
+                {trains.length === 0 ? t('noLiveData') : t('selectHint')}
+              </>
+            )}
           </div>
         </div>
       )}
