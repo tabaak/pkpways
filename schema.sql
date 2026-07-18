@@ -21,7 +21,8 @@
 BEGIN;
 
 -- (1) Station coordinates — the one thing the API never gives you.
--- Seed names/ids from /dictionaries/stations, geocode names -> lat/lng once.
+-- Seed names/ids from the station map embedded in /operations, then geocode
+-- names -> lat/lng once.
 CREATE TABLE IF NOT EXISTS stations (
     pkp_id              INTEGER PRIMARY KEY,        -- stationId from the API
     name                TEXT NOT NULL,

@@ -21,7 +21,7 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 - **🛤️ Railway-accurate routes** — Selected routes follow OSM railway tracks, with straight-line fallback where routing is unavailable
 - **🔍 Train Search** — Expand-on-demand search that matches by number, category, or service name and flies the map to the chosen train
 - **📋 Train Details Panel** — Click any train to see route, stops, delays, and carrier info
-- **🎛️ Carrier Filters** — Filter by carrier (PKP Intercity, Polregio, Koleje Mazowieckie, SKM, etc.)
+- **🎨 Carrier-coded markers** — Trains are color-coded by carrier (PKP Intercity, Polregio, Koleje Mazowieckie, SKM, etc.)
 - **🌐 Bilingual** — Full PL/EN language toggle
 - **🌙 Dark Mode** — Dark map theme option
 
@@ -33,7 +33,7 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 | Postgres 18 + Redis | ✅ Live — running via Docker Compose on the VPS |
 | Database schema | ✅ Applied (`stations`, `trains`, `train_runs`) |
 | Station geocoding (lat/lng) | ✅ Done — **2,953 / 2,964** stations have coordinates (see [Station Coordinates](#-station-coordinates--geocoding)) |
-| Static railway geometry | ✅ Generated — **7,985** directed pairs, **120** straight-line fallbacks (see [Railway geometry](#-railway-geometry)) |
+| Static railway geometry | ✅ Generated — **7,985** directed pairs, **162** straight-line fallbacks (see [Railway geometry](#-railway-geometry)) |
 | `frontend/` map UI | ✅ Wired — reads live data via `GET /api/trains` (see [Frontend](#-frontend-nextjs)) |
 
 ---
@@ -122,7 +122,10 @@ result. The worker replaces the index only after a complete cache write.
 
 ## 🗄️ Database Schema
 
-Defined in `schema.sql` (PostgreSQL 18), auto-applied on first DB init. Three tables, **live-only** (old runs pruned daily). All keyed by `(scheduleId, orderId)`.
+Defined in `schema.sql` (PostgreSQL 18), auto-applied on first DB init. The
+`train_runs` table is live-only (old runs pruned daily); `stations` and `trains`
+are reference tables. Run rows are keyed by `(scheduleId, orderId,
+operatingDate)`, while train identity rows use `(scheduleId, trainOrderId)`.
 
 ### `stations` — coordinates cache
 The one thing the API never provides. Seeded id + name from `/operations`; `latitude`/`longitude` are backfilled by `geocode_stations.py`.
@@ -141,7 +144,7 @@ Number, optional public name, carrier, and commercial category. Fed daily from
 
 | Column | Type | Source (`/schedules` route) |
 |--------|------|------------------------------|
-| `schedule_id`, `order_id` | `INTEGER` (composite PK) | `scheduleId`, `orderId` |
+| `schedule_id`, `train_order_id` | `INTEGER` (composite PK) | `scheduleId`, `trainOrderId` |
 | `number` | `VARCHAR(30)` | `nationalNumber` |
 | `name` | `VARCHAR(200)` | `name` (optional/omitted when unnamed, e.g. present for named IC services) |
 | `type` | `VARCHAR(30)` | `commercialCategorySymbol` (e.g. `S1`, `R7`) |
@@ -156,7 +159,7 @@ The `/operations` payload; the whole route stored verbatim. Upserted every poll.
 | `train_status` | `TEXT` | `trainStatus` (e.g. `"C"`) |
 | `stops` | `JSONB` | the train's whole `stations` array, verbatim |
 
-> **🔑 `(schedule_id, order_id)` is NOT unique** — `operating_date` is part of the PK for a reason. `/operations` returns a rolling ~7-day window, and the same `(scheduleId, orderId)` recurs across dates: one run per day. Any identifier you build from the pair alone (a cache key, a map key, a React key) **will collide** and silently keep an arbitrary date's run. This already cost us the Redis cache once — see [Redis cache layout](#redis-cache-layout).
+> **🔑 Run identity includes the operating date** — `operating_date` is part of the `train_runs` primary key for a reason. `/operations` returns a rolling ~7-day window, and the same `(scheduleId, orderId)` recurs across dates: one run per day. Any run identifier built from the pair alone (such as a cache key) **will collide** and silently keep an arbitrary date's run. This already cost us the Redis cache once — see [Redis cache layout](#redis-cache-layout). Train identity rows use the stable `(scheduleId, trainOrderId)` pair instead.
 
 > **⏱️ Where delays live:** there is **no delay column**. Delays are per-stop **inside `train_runs.stops`** — each stop object has `arrivalDelayMinutes` / `departureDelayMinutes`. These keys are **absent when the delay is zero** (treat missing as `0`). A train's "current" delay = the delay at its most-recently-passed or next stop, determined by comparing `actual*`/`planned*` timestamps against now (Europe/Warsaw).
 
@@ -281,7 +284,7 @@ pairs** generated from the live database's located route sequences:
 
 - The one-off generator is [`tools/rail-routing/generate_rail_geometry.py`](tools/rail-routing/generate_rail_geometry.py).
 - The temporary OSRM railway profile and exact Poland-extract setup are documented in [`tools/rail-routing/README.md`](tools/rail-routing/README.md).
-- The committed snapshot is 6,028,760 bytes, with 7,865 routed pairs and 120 logged straight-line fallbacks.
+- The committed snapshot is 5,867,629 bytes, with 7,823 routed pairs and 162 logged straight-line fallbacks.
 - Generation validates every final Google polyline6 value with the same decoding rules used by the browser before writing the asset. A malformed segment must fail the job rather than degrade to a straight line at runtime.
 - Regenerate it after timetable or network changes; the live worker and Redis hot path never carry these polylines.
 

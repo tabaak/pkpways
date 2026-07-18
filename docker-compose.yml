@@ -1,8 +1,7 @@
 # PkpWays datastores — PostgreSQL 18 + Redis.
 #
-# Brings up the two backing stores for the data-sync worker. The worker itself
-# is NOT included here (it's being rewritten); it connects to these over the
-# DATABASE_URL / REDIS_URL it reads from its own env.
+# Brings up the two backing stores and the data-sync worker. The worker
+# connects to the stores over the internal compose network.
 #
 # Usage:
 #   cp .env.example .env      # then edit passwords
