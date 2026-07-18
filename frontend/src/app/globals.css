@@ -90,17 +90,25 @@ html.dark .leaflet-bar a {
   place-items: center;
   cursor: pointer;
   color: #0f172a;
-  background: rgba(255, 255, 255, 0.5);
-  border: 0;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
   border-radius: 0.75rem;
+  box-shadow:
+    0 10px 30px -12px rgba(15, 23, 42, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
   transition:
     color 180ms ease,
-    background-color 180ms ease;
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .location-control__button:hover {
   color: #0f172a;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.7);
 }
 
 .location-control__button:focus-visible {
@@ -114,29 +122,37 @@ html.dark .leaflet-bar a {
 }
 
 .location-control__button--active {
-  color: #fff;
-  background: rgba(15, 23, 42, 0.68);
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.7);
 }
 
 .location-control__button--active:hover {
-  color: #fff;
-  background: rgba(15, 23, 42, 0.8);
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.8);
 }
 
 html.dark .location-control__button {
   color: #f1f5f9;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(17, 24, 39, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 12px 34px -12px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 html.dark .location-control__button:hover {
   color: #fff;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(17, 24, 39, 0.8);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 html.dark .location-control__button--active,
 html.dark .location-control__button--active:hover {
   color: #fff;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(17, 24, 39, 0.85);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .location-control__icon--locating {

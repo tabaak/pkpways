@@ -344,7 +344,13 @@ function MapEffects({ onBackgroundClick }: { onBackgroundClick: () => void }) {
 type LocationStatus = 'idle' | 'locating' | 'active' | 'error'
 
 /** Quiet right-side GPS control and the user's last resolved browser position. */
-function LocationControl({ reducedMotion }: { reducedMotion: boolean }) {
+function LocationControl({
+  reducedMotion,
+  hidden,
+}: {
+  reducedMotion: boolean
+  hidden: boolean
+}) {
   const map = useMap()
   const { t } = useApp()
   const [container, setContainer] = useState<HTMLElement | null>(null)
@@ -415,6 +421,7 @@ function LocationControl({ reducedMotion }: { reducedMotion: boolean }) {
   return (
     <>
       {container &&
+        !hidden &&
         createPortal(
           <>
             <button
@@ -538,7 +545,7 @@ export default function MapView({
       />
 
       <ZoomControl position="bottomleft" />
-      <LocationControl reducedMotion={reducedMotion} />
+      <LocationControl reducedMotion={reducedMotion} hidden={Boolean(selected)} />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
       <MapFocus
         target={selected ? selected.position : null}
