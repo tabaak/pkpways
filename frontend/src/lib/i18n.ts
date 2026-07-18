@@ -26,6 +26,8 @@ const DICT = {
     en: 'Click a train on the map to see details',
   },
   close: { pl: 'Zamknij', en: 'Close' },
+  showDetails: { pl: 'Pokaż trasę', en: 'Show route' },
+  hideDetails: { pl: 'Ukryj trasę', en: 'Hide route' },
   lightMode: { pl: 'Jasny motyw', en: 'Light mode' },
   darkMode: { pl: 'Ciemny motyw', en: 'Dark mode' },
   trainsRunning: { pl: 'w ruchu', en: 'running' },

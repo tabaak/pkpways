@@ -107,7 +107,11 @@ export function AppShell() {
       <TopBar trains={trains} onSelect={focusTrain} />
 
       {selected && (
-        <TrainDetailsPanel train={selected} onClose={() => setSelectedId(null)} />
+        <TrainDetailsPanel
+          key={selected.id}
+          train={selected}
+          onClose={() => setSelectedId(null)}
+        />
       )}
 
       {/* Bottom status pill: empty-data state takes priority over the

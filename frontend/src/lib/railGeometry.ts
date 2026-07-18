@@ -153,10 +153,25 @@ function measureSegment(segment: RailSegment): { cumulative: number[]; total: nu
 }
 
 /** Point at fraction `t` along a segment's cumulative distance. */
-function pointAlong(segment: RailSegment, t: number): { position: LatLng; bearing: number } {
-  if (segment.length < 2) return { position: segment[0] ?? { lat: 0, lng: 0 }, bearing: 0 }
+function locationAlong(
+  segment: RailSegment,
+  t: number
+): { position: LatLng; bearing: number; toIndex: number } {
+  if (segment.length < 2) {
+    return {
+      position: segment[0] ?? { lat: 0, lng: 0 },
+      bearing: 0,
+      toIndex: 0,
+    }
+  }
   const { cumulative, total } = measureSegment(segment)
-  if (total <= 0) return { position: segment[0], bearing: bearing(segment[0], segment.at(-1) ?? segment[0]) }
+  if (total <= 0) {
+    return {
+      position: segment[0],
+      bearing: bearing(segment[0], segment.at(-1) ?? segment[0]),
+      toIndex: 1,
+    }
+  }
 
   const target = Math.min(1, Math.max(0, t)) * total
   let low = 1
@@ -173,7 +188,17 @@ function pointAlong(segment: RailSegment, t: number): { position: LatLng; bearin
   const to = segment[toIndex]
   const length = cumulative[toIndex] - cumulative[fromIndex]
   const fraction = length > 0 ? (target - cumulative[fromIndex]) / length : 0
-  return { position: lerp(from, to, fraction), bearing: bearing(from, to) }
+  return {
+    position: lerp(from, to, fraction),
+    bearing: bearing(from, to),
+    toIndex,
+  }
+}
+
+/** Point at fraction `t` along a segment's cumulative distance. */
+function pointAlong(segment: RailSegment, t: number): { position: LatLng; bearing: number } {
+  const { position, bearing: heading } = locationAlong(segment, t)
+  return { position, bearing: heading }
 }
 
 /** Render a live marker on the current routed segment. */
@@ -182,27 +207,58 @@ export function liveRailPosition(train: TrainLive, asset: RailGeometryAsset | nu
 }
 
 /** Advance a server snapshot in real time without waiting for the next poll. */
+export function liveSegmentProgressAt(
+  train: TrainLive,
+  elapsedMs: number
+): number {
+  const duration = Math.max(1, train.segmentDurationMs)
+  const movingElapsed = Math.max(0, elapsedMs - train.segmentStartsInMs)
+  return train.segmentProgress + movingElapsed / duration
+}
+
 export function liveRailPositionAt(
   train: TrainLive,
   asset: RailGeometryAsset | null,
   elapsedMs: number
 ): { position: LatLng; bearing: number } {
-  const duration = Math.max(1, train.segmentDurationMs)
-  const movingElapsed = Math.max(0, elapsedMs - train.segmentStartsInMs)
-  const progress = train.segmentProgress + movingElapsed / duration
+  const progress = liveSegmentProgressAt(train, elapsedMs)
   return pointAlong(getRailSegment(train, train.fromIndex, asset), progress)
 }
 
-/** Stitch every routed segment into one route line for the detail view. */
-export function stitchedRoute(train: Train, asset: RailGeometryAsset | null): LatLng[] {
-  if (train.stops.length < 2) return train.stops.map(({ lat, lng }) => ({ lat, lng }))
-  const points: LatLng[] = []
-  for (let index = 0; index < train.stops.length - 1; index += 1) {
-    const segment = getRailSegment(train, index, asset)
-    for (const point of segment) {
-      const previous = points.at(-1)
-      if (!previous || previous.lat !== point.lat || previous.lng !== point.lng) points.push(point)
+function appendUnique(target: LatLng[], points: LatLng[]): void {
+  for (const point of points) {
+    const previous = target.at(-1)
+    if (!previous || previous.lat !== point.lat || previous.lng !== point.lng) {
+      target.push(point)
     }
   }
-  return points
+}
+
+/** Split the routed line at the train's current progress point. */
+export function splitStitchedRoute(
+  train: TrainLive,
+  asset: RailGeometryAsset | null,
+  segmentProgress = train.segmentProgress
+): { traveled: LatLng[]; remaining: LatLng[] } {
+  const traveled: LatLng[] = []
+  const remaining: LatLng[] = []
+  const currentIndex = Math.min(
+    Math.max(0, train.fromIndex),
+    train.stops.length - 2
+  )
+
+  for (let index = 0; index < train.stops.length - 1; index += 1) {
+    const segment = getRailSegment(train, index, asset)
+    if (index < currentIndex) {
+      appendUnique(traveled, segment)
+    } else if (index > currentIndex) {
+      appendUnique(remaining, segment)
+    } else {
+      const { position, toIndex } = locationAlong(segment, segmentProgress)
+      appendUnique(traveled, [...segment.slice(0, toIndex), position])
+      appendUnique(remaining, [position, ...segment.slice(toIndex)])
+    }
+  }
+
+  return { traveled, remaining }
 }

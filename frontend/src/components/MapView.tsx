@@ -16,7 +16,13 @@ import {
 } from 'react-leaflet'
 import { getCarrier } from '@/lib/carriers'
 import { routeCoords } from '@/lib/geo'
-import { liveRailPositionAt, loadRailGeometry, stitchedRoute, type RailGeometryAsset } from '@/lib/railGeometry'
+import {
+  liveRailPositionAt,
+  liveSegmentProgressAt,
+  loadRailGeometry,
+  splitStitchedRoute,
+  type RailGeometryAsset,
+} from '@/lib/railGeometry'
 import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { LatLng, Theme, TrainLive } from '@/lib/types'
 import { TRAIN_PATH } from './icons'
@@ -195,10 +201,14 @@ function SelectedRoute({
   train,
   railGeometry,
   loading,
+  sampledAt,
+  receivedAt,
 }: {
   train: TrainLive
   railGeometry: RailGeometryAsset | null
   loading: boolean
+  sampledAt: number
+  receivedAt: number
 }) {
   // Labels are noisy when zoomed out, so reveal them progressively: endpoints
   // first, then every intermediate stop once the user is zoomed in close.
@@ -213,22 +223,50 @@ function SelectedRoute({
   if (loading) return null
   const carrier = getCarrier(train.carrierId)
   const coords = routeCoords(train)
-  const routed = stitchedRoute(train, railGeometry)
-  const positions = routed.map((c) => [c.lat, c.lng] as [number, number])
+  const progress = liveSegmentProgressAt(train, receivedAt - sampledAt)
+  const { traveled, remaining } = splitStitchedRoute(
+    train,
+    railGeometry,
+    progress
+  )
+  const traveledPositions = traveled.map(
+    (c) => [c.lat, c.lng] as [number, number]
+  )
+  const remainingPositions = remaining.map(
+    (c) => [c.lat, c.lng] as [number, number]
+  )
 
   return (
     <>
-      {/* Soft casing under the line */}
-      <Polyline
-        positions={positions}
-        pathOptions={{ color: carrier.color, weight: 9, opacity: 0.18 }}
-      />
-      <Polyline
-        positions={positions}
-        pathOptions={{ color: carrier.color, weight: 3.5, opacity: 0.95 }}
-      />
+      {/* The train marker is the boundary between the carrier-colored traveled
+          route and the lower-emphasis grey route still ahead. */}
+      {remainingPositions.length > 1 && (
+        <>
+          <Polyline
+            positions={remainingPositions}
+            pathOptions={{ color: '#64748b', weight: 9, opacity: 0.16 }}
+          />
+          <Polyline
+            positions={remainingPositions}
+            pathOptions={{ color: '#64748b', weight: 3.5, opacity: 0.72 }}
+          />
+        </>
+      )}
+      {traveledPositions.length > 1 && (
+        <>
+          <Polyline
+            positions={traveledPositions}
+            pathOptions={{ color: carrier.color, weight: 9, opacity: 0.18 }}
+          />
+          <Polyline
+            positions={traveledPositions}
+            pathOptions={{ color: carrier.color, weight: 3.5, opacity: 0.95 }}
+          />
+        </>
+      )}
       {coords.map((c, i) => {
         const isEndpoint = i === 0 || i === coords.length - 1
+        const passed = i <= train.fromIndex
         const showLabel = isEndpoint ? showEndpointLabels : showAllLabels
         return (
           <CircleMarker
@@ -238,7 +276,7 @@ function SelectedRoute({
             pathOptions={{
               color: '#ffffff',
               weight: 2,
-              fillColor: carrier.color,
+              fillColor: passed ? carrier.color : '#64748b',
               fillOpacity: 1,
             }}
           >
@@ -364,7 +402,7 @@ export default function MapView({
         maxZoom={20}
       />
 
-      <ZoomControl position="bottomright" />
+      <ZoomControl position="bottomleft" />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
       <MapFocus
         target={selected ? selected.position : null}
@@ -377,6 +415,8 @@ export default function MapView({
           train={selected}
           railGeometry={railGeometry}
           loading={railGeometryLoading}
+          sampledAt={sampledAt}
+          receivedAt={receivedAt}
         />
       )}
 
