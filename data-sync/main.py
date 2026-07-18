@@ -55,6 +55,43 @@ load_dotenv()
 # either side of midnight.
 WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
+# Per-stop fields worth keeping in the Redis copy. The first block is what the
+# frontend's live-map read layer actually reads today (see the RawStop type in
+# frontend .../datastore.ts); isConfirmed/isCancelled are cheap booleans that
+# carry real run status, so they're retained for likely future use rather than
+# discarded. Everything else /operations returns per stop is dropped:
+# plannedSequenceNumber and actualSequenceNumber (no consumer; stop order comes
+# from array position), and plannedArrivalTime/plannedDepartureTime (pure HH:MM
+# duplicates of the ISO *Arrival/*Departure values). Trimming shrinks the cached
+# fleet payload ~44% (~62MB -> ~35MB), and with it the frontend's cold read. The
+# durable train_runs.stops column keeps the full verbatim route untouched.
+_LIVE_STOP_FIELDS = frozenset(
+    {
+        "stationId",
+        "plannedArrival",
+        "plannedDeparture",
+        "actualArrival",
+        "actualDeparture",
+        "arrivalDelayMinutes",
+        "departureDelayMinutes",
+        "isConfirmed",
+        "isCancelled",
+    }
+)
+
+
+def _slim_train_for_cache(train: dict[str, Any]) -> dict[str, Any]:
+    """A shallow copy of `train` whose stops carry only frontend-read fields.
+
+    Returns a new dict (and new stop dicts) so the caller's objects — and the
+    full route already written to Postgres — are never mutated.
+    """
+    slim_stops = [
+        {k: v for k, v in stop.items() if k in _LIVE_STOP_FIELDS}
+        for stop in (train.get("stations") or [])
+    ]
+    return {**train, "stations": slim_stops}
+
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -383,7 +420,11 @@ class Storage:
             date = str(operating_date)[:10]
             run_key = f"{schedule_id}:{order_id}:{date}"
             keys.append(run_key)
-            pipe.set(f"operation:{run_key}", json.dumps(train), ex=ttl_seconds)
+            pipe.set(
+                f"operation:{run_key}",
+                json.dumps(_slim_train_for_cache(train)),
+                ex=ttl_seconds,
+            )
             pending += 1
 
             # Flush in chunks so we never buffer the whole national fleet into
