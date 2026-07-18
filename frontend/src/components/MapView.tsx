@@ -3,7 +3,9 @@
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
+  Circle,
   CircleMarker,
   MapContainer,
   Marker,
@@ -14,6 +16,7 @@ import {
   useMapEvents,
   ZoomControl,
 } from 'react-leaflet'
+import { useApp } from '@/app/providers'
 import { getCarrier } from '@/lib/carriers'
 import { routeCoords } from '@/lib/geo'
 import {
@@ -25,7 +28,7 @@ import {
 } from '@/lib/railGeometry'
 import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { LatLng, Theme, TrainLive } from '@/lib/types'
-import { TRAIN_PATH } from './icons'
+import { LocationIcon, TRAIN_PATH } from './icons'
 
 const POLAND_CENTER: [number, number] = [52.1, 19.4]
 const POLAND_BOUNDS: [[number, number], [number, number]] = [
@@ -338,6 +341,138 @@ function MapEffects({ onBackgroundClick }: { onBackgroundClick: () => void }) {
   return null
 }
 
+type LocationStatus = 'idle' | 'locating' | 'active' | 'error'
+
+/** Quiet right-side GPS control and the user's last resolved browser position. */
+function LocationControl({ reducedMotion }: { reducedMotion: boolean }) {
+  const map = useMap()
+  const { t } = useApp()
+  const [container, setContainer] = useState<HTMLElement | null>(null)
+  const [position, setPosition] = useState<{
+    lat: number
+    lng: number
+    accuracy: number
+  } | null>(null)
+  const [status, setStatus] = useState<LocationStatus>('idle')
+  const [errorMessage, setErrorMessage] = useState('')
+
+  useEffect(() => {
+    const control = new L.Control({ position: 'bottomright' })
+    control.onAdd = () => {
+      const element = L.DomUtil.create('div', 'leaflet-control location-control')
+      L.DomEvent.disableClickPropagation(element)
+      L.DomEvent.disableScrollPropagation(element)
+      setContainer(element)
+      return element
+    }
+    control.addTo(map)
+
+    return () => {
+      control.remove()
+    }
+  }, [map])
+
+  const locate = () => {
+    if (!navigator.geolocation) {
+      setStatus('error')
+      setErrorMessage(t('locationUnavailable'))
+      return
+    }
+
+    setStatus('locating')
+    setErrorMessage('')
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const next = {
+          lat: coords.latitude,
+          lng: coords.longitude,
+          accuracy: coords.accuracy,
+        }
+        setPosition(next)
+        setStatus('active')
+        const zoom = Math.max(map.getZoom(), 13)
+        if (reducedMotion) map.setView([next.lat, next.lng], zoom)
+        else map.flyTo([next.lat, next.lng], zoom, { duration: 0.9 })
+      },
+      (error) => {
+        setStatus('error')
+        setErrorMessage(
+          error.code === error.PERMISSION_DENIED
+            ? t('locationDenied')
+            : t('locationUnavailable')
+        )
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10_000,
+        maximumAge: 15_000,
+      }
+    )
+  }
+
+  const label = status === 'locating' ? t('locating') : t('locateMe')
+
+  return (
+    <>
+      {container &&
+        createPortal(
+          <>
+            <button
+              type="button"
+              className={`location-control__button${status === 'active' ? ' location-control__button--active' : ''}`}
+              onClick={locate}
+              disabled={status === 'locating'}
+              aria-label={label}
+              title={label}
+            >
+              <LocationIcon
+                className={`h-[18px] w-[18px]${status === 'locating' ? ' location-control__icon--locating' : ''}`}
+              />
+            </button>
+            {errorMessage && (
+              <p className="location-control__error" role="alert">
+                {errorMessage}
+              </p>
+            )}
+          </>,
+          container
+        )}
+
+      {position && (
+        <>
+          <Circle
+            center={[position.lat, position.lng]}
+            radius={position.accuracy}
+            interactive={false}
+            pathOptions={{
+              color: '#0284c7',
+              fillColor: '#38bdf8',
+              fillOpacity: 0.12,
+              opacity: 0.35,
+              weight: 1,
+            }}
+          />
+          <CircleMarker
+            center={[position.lat, position.lng]}
+            radius={7}
+            pathOptions={{
+              color: '#ffffff',
+              fillColor: '#0284c7',
+              fillOpacity: 1,
+              opacity: 1,
+              weight: 3,
+            }}
+          >
+            <Tooltip direction="top" offset={[0, -8]} opacity={1}>
+              {t('yourLocation')}
+            </Tooltip>
+          </CircleMarker>
+        </>
+      )}
+    </>
+  )
+}
+
 export default function MapView({
   trains,
   sampledAt,
@@ -403,6 +538,7 @@ export default function MapView({
       />
 
       <ZoomControl position="bottomleft" />
+      <LocationControl reducedMotion={reducedMotion} />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
       <MapFocus
         target={selected ? selected.position : null}

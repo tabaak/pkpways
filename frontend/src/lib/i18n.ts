@@ -39,6 +39,17 @@ const DICT = {
     pl: 'Ładowanie pociągów na żywo',
     en: 'Loading live trains',
   },
+  locateMe: { pl: 'Pokaż moją lokalizację', en: 'Show my location' },
+  locating: { pl: 'Ustalanie lokalizacji', en: 'Finding your location' },
+  yourLocation: { pl: 'Twoja lokalizacja', en: 'Your location' },
+  locationDenied: {
+    pl: 'Zezwól przeglądarce na dostęp do lokalizacji.',
+    en: 'Allow location access in your browser.',
+  },
+  locationUnavailable: {
+    pl: 'Nie udało się ustalić lokalizacji.',
+    en: 'Unable to find your location.',
+  },
   searchLabel: { pl: 'Szukaj pociągu', en: 'Search train' },
   searchPlaceholder: {
     pl: 'Szukaj numeru pociągu…',
