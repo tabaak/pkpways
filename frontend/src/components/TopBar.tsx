@@ -56,9 +56,9 @@ export function TopBar({
             onClick={() => setSearchOpen(true)}
             aria-label={t('searchLabel')}
             title={t('searchLabel')}
-            className="grid h-9 w-9 place-items-center rounded-xl bg-white/50 text-slate-600 transition hover:bg-white/80 hover:text-slate-900 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+            className="group grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-white/50 text-slate-600 transition duration-200 ease-out hover:bg-white/80 hover:text-slate-900 active:scale-95 motion-reduce:transition-none dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
           >
-            <SearchIcon className="h-[18px] w-[18px]" />
+            <SearchIcon className="h-[18px] w-[18px] transition-transform duration-200 ease-out group-hover:scale-105 group-hover:-rotate-3 motion-reduce:transition-none" />
           </button>
 
           {/* Language toggle */}
@@ -66,21 +66,27 @@ export function TopBar({
             type="button"
             onClick={toggleLang}
             aria-label="Toggle language"
-            className="flex h-9 items-center rounded-xl bg-white/50 px-1 text-xs font-semibold text-slate-500 transition hover:bg-white/80 dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10"
+            className="relative flex h-9 cursor-pointer items-center rounded-xl bg-white/50 px-1 text-xs font-semibold text-slate-500 transition-colors duration-200 ease-out hover:bg-white/80 active:scale-[0.98] motion-reduce:transition-none dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10"
           >
             <span
-              className={`rounded-lg px-2 py-1 transition ${
+              aria-hidden
+              className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-lg bg-slate-900 shadow-sm transition-transform duration-200 ease-out motion-reduce:transition-none dark:bg-white ${
+                lang === 'en' ? 'translate-x-full' : 'translate-x-0'
+              }`}
+            />
+            <span
+              className={`relative z-10 rounded-lg px-2 py-1 transition-colors duration-200 ${
                 lang === 'pl'
-                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                  ? 'text-white dark:text-slate-900'
                   : ''
               }`}
             >
               PL
             </span>
             <span
-              className={`rounded-lg px-2 py-1 transition ${
+              className={`relative z-10 rounded-lg px-2 py-1 transition-colors duration-200 ${
                 lang === 'en'
-                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                  ? 'text-white dark:text-slate-900'
                   : ''
               }`}
             >
@@ -94,12 +100,12 @@ export function TopBar({
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? t('lightMode') : t('darkMode')}
             title={theme === 'dark' ? t('lightMode') : t('darkMode')}
-            className="grid h-9 w-9 place-items-center rounded-xl bg-white/50 text-slate-600 transition hover:bg-white/80 hover:text-slate-900 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+            className="grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-white/50 text-slate-600 transition duration-200 ease-out hover:bg-white/80 hover:text-slate-900 active:scale-95 motion-reduce:transition-none dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
           >
             {theme === 'dark' ? (
-              <SunIcon className="h-[18px] w-[18px]" />
+              <SunIcon key="sun" className="nav-toggle-icon h-[18px] w-[18px]" />
             ) : (
-              <MoonIcon className="h-[18px] w-[18px]" />
+              <MoonIcon key="moon" className="nav-toggle-icon h-[18px] w-[18px]" />
             )}
           </button>
         </div>
