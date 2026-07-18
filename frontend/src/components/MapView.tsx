@@ -270,7 +270,7 @@ function SelectedRoute({
         const showLabel = isEndpoint ? showEndpointLabels : showAllLabels
         return (
           <CircleMarker
-            key={train.stops[i].stationId}
+            key={`${train.stops[i].stationId}:${i}`}
             center={[c.lat, c.lng]}
             radius={isEndpoint ? 5 : 3.5}
             pathOptions={{

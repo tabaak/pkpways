@@ -143,7 +143,7 @@ export function TrainDetailsPanel({
             const activeSegment = i === train.toIndex // connector above is active
 
             return (
-              <li key={stop.stationId} className="flex gap-3">
+              <li key={`${stop.stationId}:${i}`} className="flex gap-3">
                 {/* Timeline gutter */}
                 <div className="flex w-4 flex-col items-center">
                   {/* connector above the dot */}
