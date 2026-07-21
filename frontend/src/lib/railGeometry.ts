@@ -2,7 +2,6 @@
 
 import { bearing, lerp } from './geo'
 import type { LatLng, Train, TrainLive } from './types'
-import bundledAsset from '../../public/data/rail-segments.json'
 
 export type RailGeometryAsset = {
   version: number
@@ -17,13 +16,13 @@ let loadedAsset: RailGeometryAsset | null = null
 const decoded = new Map<string, RailSegment>()
 const measurements = new WeakMap<RailSegment, { cumulative: number[]; total: number }>()
 
-/** Fetch the immutable-ish public asset once per browser session. */
+/** Fetch the immutable-ish public asset once per browser session.
+ *  It is deliberately *not* statically imported: at ~6 MB the bundler would
+ *  inline it into the client chunk, and parsing that much JS before first
+ *  paint is seconds of blocked main thread on a phone. Fetching it keeps the
+ *  cost off the critical path (and off the bundle) — callers render straight
+ *  chords, or nothing, until it lands. */
 export function loadRailGeometry(): Promise<RailGeometryAsset | null> {
-  // The JSON is bundled as a deterministic fallback. This prevents a
-  // deployment/static-path issue from turning every route into a chord.
-  if (!loadedAsset && bundledAsset?.segments) {
-    loadedAsset = bundledAsset as RailGeometryAsset
-  }
   if (loadedAsset) return Promise.resolve(loadedAsset)
   if (!assetPromise) {
     assetPromise = fetch('/data/rail-segments.json', { cache: 'force-cache' })

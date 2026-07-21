@@ -51,13 +51,28 @@ const TILES: Record<Theme, { url: string; attribution: string }> = {
 
 const TRAIN_SVG = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="${TRAIN_PATH}"/></svg>`
 
-const FRAME_INTERVAL_MS = 50
+/** How often marker positions are recomputed, as a function of zoom.
+ *  Interpolation is pure oversampling when zoomed out: at z6 a 100 km/h train
+ *  advances ~0.05 px in 50 ms, so ticking every frame just burns a style write
+ *  per train per tick for motion nobody can see. */
+function frameIntervalForZoom(zoom: number): number {
+  if (zoom >= 12) return 50
+  if (zoom >= 10) return 100
+  if (zoom >= 8) return 250
+  return 500
+}
+
 const frameListeners = new Set<() => void>()
+let frameIntervalMs = frameIntervalForZoom(6)
 let frameRequest: number | null = null
 let previousFrame = 0
 
+function setFrameInterval(ms: number) {
+  frameIntervalMs = ms
+}
+
 function runAnimationFrame(now: number) {
-  if (now - previousFrame >= FRAME_INTERVAL_MS) {
+  if (now - previousFrame >= frameIntervalMs) {
     previousFrame = now
     frameListeners.forEach((listener) => listener())
   }
@@ -297,6 +312,75 @@ function SelectedRoute({
           </CircleMarker>
         )
       })}
+    </>
+  )
+}
+
+/** Fraction of the viewport kept as an off-screen margin, so markers are
+ *  already mounted when a pan brings them into view instead of popping in. */
+const VIEWPORT_PADDING = 0.25
+
+type Viewport = { bounds: L.LatLngBounds; zoom: number }
+
+/** All live train markers, limited to the ones actually on screen.
+ *  Every mounted marker costs ~5 DOM nodes plus a position write per tick, so
+ *  with the full country's worth of trains this culling is what keeps a
+ *  zoomed-in view affordable on a phone. */
+function TrainLayer({
+  trains,
+  railGeometry,
+  sampledAt,
+  receivedAt,
+  reducedMotion,
+  selectedId,
+  onSelect,
+}: {
+  trains: TrainLive[]
+  railGeometry: RailGeometryAsset | null
+  sampledAt: number
+  receivedAt: number
+  reducedMotion: boolean
+  selectedId: string | null
+  onSelect: (id: string) => void
+}) {
+  const map = useMap()
+  const readViewport = (): Viewport => ({
+    bounds: map.getBounds().pad(VIEWPORT_PADDING),
+    zoom: map.getZoom(),
+  })
+  const [viewport, setViewport] = useState<Viewport>(readViewport)
+
+  useMapEvents({
+    moveend: () => setViewport(readViewport()),
+    zoomend: () => setViewport(readViewport()),
+  })
+
+  useEffect(() => {
+    setFrameInterval(frameIntervalForZoom(viewport.zoom))
+  }, [viewport.zoom])
+
+  const visible = useMemo(
+    () =>
+      trains.filter((train) =>
+        viewport.bounds.contains([train.position.lat, train.position.lng])
+      ),
+    [trains, viewport.bounds]
+  )
+
+  return (
+    <>
+      {visible.map((train) => (
+        <TrainMarker
+          key={train.id}
+          train={train}
+          railGeometry={railGeometry}
+          sampledAt={sampledAt}
+          receivedAt={receivedAt}
+          reducedMotion={reducedMotion}
+          selected={train.id === selectedId}
+          onSelect={onSelect}
+        />
+      ))}
     </>
   )
 }
@@ -563,18 +647,30 @@ export default function MapView({
         />
       )}
 
-      {(selected ? [selected] : trains).map((train) => (
+      {/* A selected train is shown alone, so it never needs culling — and must
+          stay visible even when the details panel has pushed it off-screen. */}
+      {selected ? (
         <TrainMarker
-          key={train.id}
-          train={train}
+          key={selected.id}
+          train={selected}
           railGeometry={railGeometry}
           sampledAt={sampledAt}
           receivedAt={receivedAt}
           reducedMotion={reducedMotion}
-          selected={train.id === selectedId}
+          selected
           onSelect={onSelect}
         />
-      ))}
+      ) : (
+        <TrainLayer
+          trains={trains}
+          railGeometry={railGeometry}
+          sampledAt={sampledAt}
+          receivedAt={receivedAt}
+          reducedMotion={reducedMotion}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
+      )}
     </MapContainer>
   )
 }
