@@ -38,7 +38,7 @@ export function TopBar({
         <div className="ml-auto flex items-center gap-2">
           {/* Live train counter — only shown once there's something to count */}
           {trainCount > 0 && (
-            <div className="hidden items-center gap-2 rounded-full bg-white/50 px-3 py-1.5 text-xs font-medium text-slate-600 dark:bg-white/5 dark:text-slate-300 sm:flex">
+            <div className="hidden items-center gap-2 rounded-full bg-slate-200/50 px-3 py-1.5 text-xs font-medium text-slate-600 dark:bg-white/5 dark:text-slate-300 sm:flex">
               <span className="relative flex h-2 w-2">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
@@ -56,7 +56,7 @@ export function TopBar({
             onClick={() => setSearchOpen(true)}
             aria-label={t('searchLabel')}
             title={t('searchLabel')}
-            className="group grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-white/50 text-slate-600 transition duration-200 ease-out hover:bg-white/80 hover:text-slate-900 active:scale-95 motion-reduce:transition-none dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+            className="group grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-slate-200/50 text-slate-600 transition duration-200 ease-out hover:bg-slate-200/80 hover:text-slate-900 active:scale-95 motion-reduce:transition-none dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
           >
             <SearchIcon className="h-[18px] w-[18px] transition-transform duration-200 ease-out group-hover:scale-105 group-hover:-rotate-3 motion-reduce:transition-none" />
           </button>
@@ -66,7 +66,7 @@ export function TopBar({
             type="button"
             onClick={toggleLang}
             aria-label="Toggle language"
-            className="relative flex h-9 cursor-pointer items-center rounded-xl bg-white/50 px-1 text-xs font-semibold text-slate-500 transition-colors duration-200 ease-out hover:bg-white/80 active:scale-[0.98] motion-reduce:transition-none dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10"
+            className="relative flex h-9 cursor-pointer items-center rounded-xl bg-slate-200/50 px-1 text-xs font-semibold text-slate-500 transition-colors duration-200 ease-out hover:bg-slate-200/80 active:scale-[0.98] motion-reduce:transition-none dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10"
           >
             <span
               aria-hidden
@@ -100,7 +100,7 @@ export function TopBar({
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? t('lightMode') : t('darkMode')}
             title={theme === 'dark' ? t('lightMode') : t('darkMode')}
-            className="grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-white/50 text-slate-600 transition duration-200 ease-out hover:bg-white/80 hover:text-slate-900 active:scale-95 motion-reduce:transition-none dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+            className="grid h-9 w-9 cursor-pointer place-items-center rounded-xl bg-slate-200/50 text-slate-600 transition duration-200 ease-out hover:bg-slate-200/80 hover:text-slate-900 active:scale-95 motion-reduce:transition-none dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
           >
             {theme === 'dark' ? (
               <SunIcon key="sun" className="nav-toggle-icon h-[18px] w-[18px]" />
