@@ -1,0 +1,16 @@
+# Caddy site config — mounted read-only into the caddy service.
+#
+# Replace REPLACE_WITH_YOUR_DOMAIN below with the real hostname before
+# deploying. Caddy requests a Let's Encrypt certificate for whatever name is
+# written here, so it must match the DNS A record pointing at this VPS.
+#
+# Reload after editing (no downtime):
+#   sudo docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+
+pkpways.vokh.dev {
+	encode zstd gzip
+
+	# "frontend" resolves over the internal compose network; 3000 is the port
+	# inside that container, not on the host.
+	reverse_proxy frontend:3000
+}

@@ -98,5 +98,50 @@ services:
       CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-1800}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
+  # Next.js map UI. Reads Postgres/Redis over the internal compose network and
+  # never calls the PKP API. Deliberately NOT published to the host — only the
+  # caddy service can reach it.
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pkpways}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pkpways}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    expose:
+      - "3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # TLS terminator / reverse proxy. Obtains and renews Let's Encrypt certs
+  # automatically; the certs live in the caddy_data volume, so don't delete it
+  # (re-issuing on every restart will hit Let's Encrypt rate limits).
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pg_data:
+  caddy_data:
+  caddy_config:

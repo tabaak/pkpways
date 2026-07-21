@@ -1,0 +1,13 @@
+# Keep the build context small — node_modules and .next are rebuilt in-image.
+node_modules
+.next
+out
+*.tsbuildinfo
+
+# Secrets never belong in an image layer.
+.env
+.env*.local
+
+# Local dev helpers
+diag5.mjs
+.DS_Store
