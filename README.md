@@ -22,6 +22,7 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 - **🔍 Train Search** — Expand-on-demand search that matches by number, category, or service name and flies the map to the chosen train
 - **📋 Train Details Panel** — Click any train to see route, stops, delays, and carrier info
 - **🎨 Carrier-coded markers** — Trains are color-coded by carrier (PKP Intercity, Polregio, Koleje Mazowieckie, SKM, etc.)
+- **📍 Locate Me** — Quiet bottom-right GPS control that resolves user browser geolocation, centers/zooms the map, and displays accuracy bounds
 - **🌐 Bilingual** — Full PL/EN language toggle
 - **🌙 Dark Mode** — Dark map theme option
 
@@ -439,6 +440,14 @@ train among the live set — no extra API call, it filters the already-loaded
   same train is chosen again.
 - Full ARIA `combobox`/`listbox` semantics with `aria-activedescendant`; ↑/↓
   move the highlight, `Enter` selects.
+
+### 📍 Geolocation (Locate Me)
+
+`src/components/MapView.tsx` implements a Leaflet-integrated `LocationControl` component to place the user's position on the map.
+
+- **Status Management** — Tracks `'idle' | 'locating' | 'active' | 'error'` states, displaying localized loading text or error messages (e.g., if permission is denied or location is unavailable).
+- **Map Focus** — On location success, zooms and centers the map onto the user's coordinates, respecting the `prefers-reduced-motion` flag (instantly setting view vs. animating a smooth `flyTo`).
+- **Visual Indicators** — Renders a blue `CircleMarker` at the user's coordinates with a tooltip and a semi-transparent `Circle` representing the geolocation accuracy radius.
 
 ### Running it locally
 
