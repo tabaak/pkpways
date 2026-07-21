@@ -413,6 +413,42 @@ html.dark .train-marker__body {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
+/* Touch devices: flatten every blur in the marker.
+ *
+ * Leaflet moves markers with a transform, which is only free if each marker
+ * owns a compositor layer — at ~700 on screen the browser caps layers, so most
+ * are genuinely repainted on every position tick. Repaint cost is dominated by
+ * the per-element blurs (the drop-shadow filter especially, which forces its
+ * own paint pass), so they're replaced with zero-blur offsets that cost
+ * nothing. The white borders still separate markers from busy tiles.
+ *
+ * Scoped to coarse pointers rather than a width breakpoint: this is about
+ * device power, not viewport size, and a narrow desktop window has the
+ * headroom for the full treatment. The selected marker keeps its blurs and
+ * pulse — only one is ever rendered at a time, so it costs nothing.
+ *
+ * `contain` is deliberately `layout style` without `paint`: the direction
+ * pointer and delay badge both overflow the 34px box on purpose, and paint
+ * containment would clip them. */
+@media (hover: none) and (pointer: coarse) {
+  .train-marker {
+    transition: none;
+    contain: layout style;
+  }
+
+  .train-marker__dir::before {
+    filter: none;
+  }
+
+  .train-marker__body {
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  }
+
+  .train-marker__delay {
+    box-shadow: none;
+  }
+}
+
 /* Compact identity card shown when a marker is hovered or keyboard-focused. */
 .leaflet-tooltip.train-tooltip {
   padding: 8px 10px;
