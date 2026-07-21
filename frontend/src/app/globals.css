@@ -165,6 +165,13 @@ html.dark .location-control__button--active:hover {
   }
 }
 
+/* Leaflet's .leaflet-bottom is a z-index:1000 stacking context, so the error
+   message inside it would sit under the bottom status pill (z-1050). Lift the
+   whole corner instead — a child z-index cannot escape that context. */
+.leaflet-bottom.leaflet-right {
+  z-index: 1100;
+}
+
 .location-control__error {
   position: absolute;
   bottom: 0;
@@ -208,6 +215,14 @@ html.dark .location-control__error {
   /* Hover is not available on touch devices, so keep the affordance tappable. */
   .location-control {
     opacity: 0.82;
+  }
+
+  /* No room beside the button on a phone — sit above it so the message clears
+     the centred bottom status pill entirely. */
+  .location-control__error {
+    right: 0;
+    bottom: 48px;
+    max-width: calc(100vw - 28px);
   }
 }
 
