@@ -251,8 +251,6 @@ html.dark .glass {
    through the standard glass hurts legibility. */
 .glass-strong {
   background: rgba(255, 255, 255, 0.97);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid rgba(255, 255, 255, 0.6);
   box-shadow:
     0 10px 30px -12px rgba(15, 23, 42, 0.4),
@@ -265,6 +263,18 @@ html.dark .glass-strong {
   box-shadow:
     0 12px 34px -12px rgba(0, 0, 0, 0.7),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Backdrop blur is visually subtle over these mostly-opaque surfaces but adds
+   extra compositing work while the map is moving. Keep the translucent
+   surfaces without the filter so gestures stay responsive on every device. */
+.glass,
+.glass-strong,
+.location-control__button,
+.leaflet-bar a,
+.leaflet-control-attribution {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* Quiet first-load indicator inside the bottom status pill. */

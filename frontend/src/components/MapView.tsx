@@ -91,6 +91,93 @@ function subscribeToAnimationFrame(listener: () => void): () => void {
   }
 }
 
+function DebugOverlay({
+  parseDurationMs,
+  reducedMotion,
+}: {
+  parseDurationMs: number | null
+  reducedMotion: boolean
+}) {
+  const [frameStats, setFrameStats] = useState({ fps: 0, markers: 0 })
+  const [longTasks, setLongTasks] = useState<{
+    supported: boolean
+    count: number
+    last: number
+    max: number
+  }>(() => ({
+    supported:
+      typeof PerformanceObserver !== 'undefined' &&
+      PerformanceObserver.supportedEntryTypes?.includes('longtask'),
+    count: 0,
+    last: 0,
+    max: 0,
+  }))
+
+  useEffect(() => {
+    let frameCount = 0
+    let sampledAt = performance.now()
+    let requestId = 0
+
+    const sample = (now: number) => {
+      frameCount += 1
+      const elapsed = now - sampledAt
+      if (elapsed >= 1000) {
+        setFrameStats({
+          fps: Math.round((frameCount * 1000) / elapsed),
+          markers: document.querySelectorAll('.train-marker-wrapper').length,
+        })
+        frameCount = 0
+        sampledAt = now
+      }
+      requestId = window.requestAnimationFrame(sample)
+    }
+
+    requestId = window.requestAnimationFrame(sample)
+    return () => window.cancelAnimationFrame(requestId)
+  }, [])
+
+  useEffect(() => {
+    if (!longTasks.supported) return
+
+    const observer = new PerformanceObserver((list) => {
+      const durations = list.getEntries().map((entry) => entry.duration)
+      if (durations.length === 0) return
+      const last = durations.at(-1) ?? 0
+      const batchMax = Math.max(...durations)
+      setLongTasks((current) => ({
+        supported: true,
+        count: current.count + durations.length,
+        last,
+        max: Math.max(current.max, batchMax),
+      }))
+    })
+    observer.observe({ type: 'longtask', buffered: true })
+    return () => observer.disconnect()
+  }, [longTasks.supported])
+
+  const tick = reducedMotion ? 'off' : `${frameIntervalMs} ms`
+  const parse = parseDurationMs == null ? '—' : `${parseDurationMs.toFixed(1)} ms`
+  const longTask = longTasks.supported === false
+    ? 'unsupported'
+    : longTasks.count === 0
+      ? '—'
+      : `${longTasks.last.toFixed(0)} / ${longTasks.max.toFixed(0)} ms`
+
+  return (
+    <aside
+      aria-label="Performance diagnostics"
+      className="pointer-events-none fixed top-[5.25rem] left-3 z-[2000] rounded-lg bg-slate-950/90 px-3 py-2 font-mono text-[11px] leading-5 text-slate-100 shadow-lg"
+    >
+      <div>FPS {frameStats.fps}</div>
+      <div>markers {frameStats.markers}</div>
+      <div>tick {tick}</div>
+      <div>JSON.parse {parse}</div>
+      <div>long last/max {longTask}</div>
+      {longTasks.supported !== false && <div>long count {longTasks.count}</div>}
+    </aside>
+  )
+}
+
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false)
   useEffect(() => {
@@ -568,6 +655,7 @@ export default function MapView({
   trains,
   sampledAt,
   receivedAt,
+  parseDurationMs,
   selectedId,
   focusNonce,
   theme,
@@ -576,6 +664,7 @@ export default function MapView({
   trains: TrainLive[]
   sampledAt: number
   receivedAt: number
+  parseDurationMs: number | null
   selectedId: string | null
   focusNonce: number
   theme: Theme
@@ -583,6 +672,9 @@ export default function MapView({
 }) {
   const tiles = TILES[theme]
   const reducedMotion = useReducedMotion()
+  const [debugEnabled] = useState(
+    () => new URLSearchParams(window.location.search).get('debug') === '1'
+  )
   const selected = trains.find((t) => t.id === selectedId) ?? null
   const [railGeometry, setRailGeometry] = useState<RailGeometryAsset | null>(null)
   const [railGeometryLoading, setRailGeometryLoading] = useState(true)
@@ -631,6 +723,12 @@ export default function MapView({
       <ZoomControl position="bottomleft" />
       <LocationControl reducedMotion={reducedMotion} hidden={Boolean(selected)} />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
+      {debugEnabled && (
+        <DebugOverlay
+          parseDurationMs={parseDurationMs}
+          reducedMotion={reducedMotion}
+        />
+      )}
       <MapFocus
         target={selected ? selected.position : null}
         nonce={focusNonce}

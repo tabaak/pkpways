@@ -37,11 +37,13 @@ function useLiveTrains() {
     trains: TrainLive[]
     sampledAt: number
     receivedAt: number
+    parseDurationMs: number | null
     loading: boolean
   }>({
     trains: [],
     sampledAt: 0,
     receivedAt: 0,
+    parseDurationMs: null,
     loading: true,
   })
 
@@ -53,13 +55,24 @@ function useLiveTrains() {
       try {
         const res = await fetch('/api/trains', { signal: controller.signal })
         if (!res.ok) return
-        const data = (await res.json()) as { trains: TrainLive[]; at: string }
+        let data: { trains: TrainLive[]; at: string }
+        let parseDurationMs: number | null = null
+        const debug = new URLSearchParams(window.location.search).get('debug') === '1'
+        if (debug) {
+          const body = await res.text()
+          const parseStartedAt = performance.now()
+          data = JSON.parse(body) as { trains: TrainLive[]; at: string }
+          parseDurationMs = performance.now() - parseStartedAt
+        } else {
+          data = (await res.json()) as { trains: TrainLive[]; at: string }
+        }
         const sampledAt = Date.parse(data.at)
         if (!cancelled) {
           setSnapshot({
             trains: data.trains,
             sampledAt: Number.isFinite(sampledAt) ? sampledAt : Date.now(),
             receivedAt: Date.now(),
+            parseDurationMs,
             loading: false,
           })
         }
@@ -87,7 +100,7 @@ export function AppShell() {
   // even if it's already the selected train (a plain id change wouldn't fire).
   const [focusNonce, setFocusNonce] = useState(0)
 
-  const { trains, sampledAt, receivedAt, loading } = useLiveTrains()
+  const { trains, sampledAt, receivedAt, parseDurationMs, loading } = useLiveTrains()
   const selected = trains.find((tr) => tr.id === selectedId) ?? null
 
   const focusTrain = useCallback((id: string) => {
@@ -101,6 +114,7 @@ export function AppShell() {
         trains={trains}
         sampledAt={sampledAt}
         receivedAt={receivedAt}
+        parseDurationMs={parseDurationMs}
         selectedId={selectedId}
         focusNonce={focusNonce}
         theme={theme}
