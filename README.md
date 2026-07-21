@@ -3,10 +3,26 @@
 > A real-time interactive map showing trains moving across the Polish railway network.
 > Built with **Next.js 16**, **Leaflet**, and the **PKP PLK Open Data API**.
 
+**▶ Live at [pkpways.vokh.dev](https://pkpways.vokh.dev)**
+
+[![Live](https://img.shields.io/badge/demo-pkpways.vokh.dev-2563eb)](https://pkpways.vokh.dev)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![Leaflet](https://img.shields.io/badge/Leaflet-Interactive_Map-199900?logo=leaflet)](https://leafletjs.com)
 [![PKP PLK API](https://img.shields.io/badge/PKP_PLK-Open_Data_API-003366)](https://pdp-api.plk-sa.pl)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org)
+
+---
+
+## Contents
+
+| | |
+|---|---|
+| [Overview](#-overview) · [Quick start](#-quick-start) | What it is, how to run it |
+| [Repository structure](#-repository-structure) · [Architecture](#️-architecture) | How the pieces fit |
+| [Database schema](#️-database-schema) · [PKP PLK API](#-pkp-plk-api) | Data model and upstream shapes |
+| [Interpolation](#-train-position-interpolation) · [Railway geometry](#️-railway-geometry) | How trains are placed and moved |
+| [Deployment](#-deployment) · [Configuration](#️-configuration) | Running it on a VPS |
+| [Frontend](#️-frontend-nextjs) · [Known limitations](#️-known-limitations) | The map app, and what it doesn't do |
 
 ---
 
@@ -28,38 +44,64 @@ PkpWays is a portfolio project that visualizes live train positions on an intera
 
 ### Current Status
 
+Everything below runs from a single `docker-compose.yml` on one VPS.
+
 | Component | State |
 |-----------|-------|
 | `data-sync` worker | ✅ Live — polling the real PKP API into Postgres + Redis |
-| Postgres 18 + Redis | ✅ Live — running via Docker Compose on the VPS |
+| Postgres 18 + Redis 8 | ✅ Live — bound to `127.0.0.1`, reachable only from the host |
 | Database schema | ✅ Applied (`stations`, `trains`, `train_runs`) |
-| Station geocoding (lat/lng) | ✅ Done — **2,953 / 2,964** stations have coordinates (see [Station Coordinates](#-station-coordinates--geocoding)) |
-| Static railway geometry | ✅ Generated — **7,985** directed pairs, **162** straight-line fallbacks (see [Railway geometry](#-railway-geometry)) |
-| `frontend/` map UI | ✅ Wired — reads live data via `GET /api/trains` (see [Frontend](#-frontend-nextjs)) |
+| Station geocoding (lat/lng) | ✅ Done — **2,953 / 2,967** stations have coordinates (see [Station Coordinates](#-station-coordinates--geocoding)) |
+| Static railway geometry | ✅ Generated — **7,985** directed pairs, **162** straight-line fallbacks (see [Railway geometry](#️-railway-geometry)) |
+| `frontend/` map UI | ✅ Deployed — containerized Next.js reading `GET /api/trains` (see [Frontend](#️-frontend-nextjs)) |
+| Public site + TLS | ✅ Live at [pkpways.vokh.dev](https://pkpways.vokh.dev) behind Caddy (automatic Let's Encrypt) |
+
+---
+
+## ⚡ Quick start
+
+Requires Docker, a [PKP PLK API key](https://pdp-api.plk-sa.pl), and a domain if you want TLS.
+
+```bash
+git clone https://github.com/tabaak/pkpways.git && cd pkpways
+cp .env.example .env                 # fill in passwords + PKP_API_KEY
+$EDITOR Caddyfile                    # set your hostname (or drop the caddy service)
+docker compose up -d --build
+```
+
+The first `/operations` sweep takes ~30s, so the map is empty until the worker
+logs its first `Live: … -> Redis` line. Watch it with `docker compose logs -f data-sync`.
+
+Frontend-only development against the deployed datastores is covered in
+[Running it locally](#running-it-locally); full server setup is in [Deployment](#-deployment).
 
 ---
 
 ## 📁 Repository Structure
 
-Two independent, separately-deployable parts that only ever talk to each other through Postgres/Redis (never directly), plus a root-level Docker Compose stack that runs the datastores and the worker.
+Two independently-built applications that only ever talk to each other through Postgres/Redis (never directly), wired together by one root-level Docker Compose stack.
 
 ```
 pkpways/
-├── docker-compose.yml   # Postgres 18 + Redis + data-sync worker (the deploy unit)
-├── schema.sql           # PostgreSQL schema, auto-applied on first DB init
-├── .env.example         # Template for the single root .env (passwords + API key)
-├── frontend/            # Next.js 16 app (the map UI) — reads Redis/Postgres, never the PKP API
-├── data-sync/           # Python worker: the ONLY thing that calls the PKP PLK API
-    ├── main.py               # Poll loop + Postgres/Redis writers
-    ├── geocode_stations.py   # One-off: backfills stations.latitude/longitude
-    ├── Dockerfile            # Built as the compose `data-sync` service
-    └── requirements.txt
+├── docker-compose.yml     # The deploy unit: postgres, redis, data-sync, frontend, caddy
+├── Caddyfile              # Reverse proxy + automatic TLS for the public hostname
+├── schema.sql             # PostgreSQL schema, auto-applied on first DB init
+├── .env.example           # Template for the single root .env (passwords + API key)
+├── data-sync/             # Python worker: the ONLY thing that calls the PKP PLK API
+│   ├── main.py                # Poll loop + Postgres/Redis writers
+│   ├── geocode_stations.py    # One-off: backfills stations.latitude/longitude
+│   ├── Dockerfile             # Built as the compose `data-sync` service
+│   └── requirements.txt
+├── frontend/              # Next.js 16 map UI — reads Redis/Postgres, never the PKP API
+│   ├── src/lib/server/        # Server-only read layer (the sole datastore consumer)
+│   ├── public/data/           # Bundled rail-segments.json geometry
+│   └── Dockerfile             # Multi-stage standalone build → compose `frontend` service
 └── tools/rail-routing/    # Offline OSRM profile + static geometry generator
 ```
 
 - **`data-sync/`** owns the `PKP_API_KEY` and is the sole caller of the PKP PLK API. It writes fresh data on a polling loop.
-- **`frontend/`** reads from Redis/Postgres to render the map. It never calls the PKP PLK API directly.
-- **Root `.env`** is the single source of secrets. Docker Compose injects them into all three services (see [Configuration](#-configuration)).
+- **`frontend/`** reads from Redis/Postgres to render the map. It never calls the PKP PLK API directly, and is not published to the host — only Caddy reaches it.
+- **Root `.env`** is the single source of secrets. Docker Compose injects them into every service that needs them (see [Configuration](#️-configuration)).
 
 > Note: local API-probe scripts (`operations.py`, `schedules.py`, `schedules.json`) are **gitignored** dev helpers for inspecting raw API responses and are not part of the deployable app.
 
@@ -78,7 +120,8 @@ pkpways/
 | **Database** | PostgreSQL 18 | Warm storage: station coords, train identity, live runs |
 | **Cache** | Redis 8 | Hot cache of live operations for the frontend |
 | **Worker** | Python 3.12 (`requests`, `psycopg2`, `redis`) | Polls the PKP API on a loop |
-| **Runtime** | Docker Compose on a VPS | Datastores + worker in one stack |
+| **Proxy** | Caddy 2 | TLS termination with automatic Let's Encrypt certs |
+| **Runtime** | Docker Compose on a VPS | All five services in one stack |
 | **API Source** | PKP PLK Open Data API | Official railway data source |
 
 ### Data Flow
@@ -86,12 +129,20 @@ pkpways/
 The datastores decouple user traffic from the PKP PLK API: the worker hits the API once per cycle, and any number of users read from Redis/Postgres.
 
 ```
-Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (warm storage)
-                                                        ▲
-                                     data-sync worker   │  (polls, then upserts)
-                                                        │
-                                              PKP PLK Open Data API
+                    ┌──────────────── VPS (docker compose) ───────────────┐
+                    │                                                     │
+Browser ──:443──►  Caddy ──► frontend ──► Redis (hot cache)               │
+                    │         (Next.js)      │                            │
+                    │                        └──► PostgreSQL (warm)       │
+                    │                                   ▲                 │
+                    │                    data-sync ─────┘ (polls, upserts)│
+                    └────────────────────────┬────────────────────────────┘
+                                             ▼
+                                  PKP PLK Open Data API
 ```
+
+Only Caddy is reachable from the internet. The frontend listens on an internal
+Docker network address; Postgres and Redis are published to `127.0.0.1` only.
 
 **How the worker runs (`data-sync/main.py`):**
 
@@ -99,7 +150,7 @@ Users ──► Next.js App ──► Redis (hot cache) ──► PostgreSQL (wa
 - **Daily job (on Warsaw calendar-date rollover / first boot):** `GET /schedules` → upserts train identity into `trains`; then prunes `train_runs` rows before yesterday (yesterday is retained for overnight runs and Redis warm-starts).
 - **Station names** are seeded from the `stations` id→name map **embedded in the `/operations` response** (only newly-seen ids each cycle), so no separate dictionary endpoint is needed.
 
-> ⚠️ **Cycle time is data-bound.** The `/operations` full-route payload covers the entire national fleet (~40k runs across a rolling week), so one cycle measures **~70–85s** (of which ~55–70s is the paginated fetch). `POLL_INTERVAL_SECONDS` is a **floor**, not a guarantee — if a cycle runs longer, the next starts immediately (zero sleep). If you need faster refresh later, filter by station/carrier (the API supports `carriersInclude` + station filters) or split the cadence.
+> ⚠️ **Cycle time is data-bound.** The `/operations` full-route payload covers the entire national fleet (~39k runs across a rolling week). Measured over 141 consecutive cycles in production: **median 30s, p90 49s, range 22–60s**, of which the paginated fetch is 12–51s. `POLL_INTERVAL_SECONDS` (default 30) is a **floor**, not a guarantee — if a cycle runs longer, the next starts immediately (zero sleep), so the effective refresh rate is whichever is slower. If you need faster refresh, filter by station/carrier (the API supports `carriersInclude` + station filters) or split the cadence.
 
 ### Redis cache layout
 
@@ -144,7 +195,7 @@ The one thing the API never provides. Seeded id + name from `/operations`; `lati
 |--------|------|-------|
 | `pkp_id` | `INTEGER PK` | `stationId` from the API |
 | `name` | `TEXT` | station name |
-| `latitude`, `longitude` | `NUMERIC(9,6)` | NULL only for the 11 unmatched stations |
+| `latitude`, `longitude` | `NUMERIC(9,6)` | NULL for the 11 unmatched stations, plus any newly-seeded ones not yet geocoded |
 | `geocode_source` | `TEXT` | `'overpass'` \| `'nominatim'` \| `'manual'` |
 | `geocode_confidence` | `TEXT` | `'high'` \| `'low'` \| `'unmatched'` |
 
@@ -198,12 +249,13 @@ GROUP BY schedule_id, order_id;
 
 ### Rate limiting
 
-A full `/operations` sweep is ~40 pages, so **burst-paginating a cycle will trip `429 Too Many Requests`** — that's what exhausted the Basic tier (100/hr). The client now:
+**Burst-paginating a cycle will trip `429 Too Many Requests`** — that's what exhausted the Basic tier (100/hr) when the worker paged at `pageSize=1000` (~40 requests per sweep). The client now:
 
-- Sleeps **1s between pages**, so a cycle drips rather than bursts.
+- Requests `pageSize=10000`, so a full `/operations` sweep is **~4 pages** rather than ~40.
+- Sleeps **1s between pages** (`_INTER_PAGE_DELAY_SECONDS`), so a cycle drips rather than bursts.
 - Retries `429`s with exponential backoff (max 5 attempts, capped at 120s), honouring `Retry-After` when present — as either a seconds count or an HTTP-date.
 
-Note the knock-on effect: this makes a cycle take **minutes**, which is exactly why the Redis TTL can't be derived from `POLL_INTERVAL_SECONDS`.
+The knock-on effect is that cycle time is bounded by request pacing as much as by payload size, which is why the Redis TTL is set independently of `POLL_INTERVAL_SECONDS` rather than derived from it.
 
 ### Endpoints the worker uses
 
@@ -300,7 +352,7 @@ pairs** generated from the live database's located route sequences:
 
 ### 📍 Station Coordinates — Geocoding
 
-The API never returns coordinates, so `data-sync/geocode_stations.py` backfills them in a one-off pass. **Result: 2,953 of 2,964 stations located.**
+The API never returns coordinates, so `data-sync/geocode_stations.py` backfills them in a one-off pass. **Result: 2,953 of 2,967 stations located** — 2,503 high-confidence Overpass hits, 433 low-confidence, 15 via Nominatim, 2 manual.
 
 It is **Overpass-primary, Nominatim-fallback**, and deliberately works in bulk rather than per-station:
 
@@ -316,29 +368,84 @@ docker compose exec data-sync python geocode_stations.py
 
 ---
 
-## 🚀 Deployment (Docker Compose)
+## 🚀 Deployment
 
-The whole backend — Postgres 18, Redis 8, and the `data-sync` worker — runs from the root `docker-compose.yml`.
+All five services — `postgres`, `redis`, `data-sync`, `frontend`, `caddy` — run from the root `docker-compose.yml` on a single VPS.
+
+```bash
+cp .env.example .env        # fill in passwords + PKP_API_KEY
+$EDITOR Caddyfile           # set the public hostname
+docker compose up -d --build
+docker compose ps           # postgres + redis should be (healthy)
+docker compose logs -f data-sync
+```
+
+Redeploying after a code change is `git pull && docker compose up -d --build frontend`.
+
+### Datastores
 
 - **Ports are bound to `127.0.0.1` only** (reachable from the VPS itself, not the public internet). Reach them from a laptop via SSH tunnel: `ssh -L 5432:127.0.0.1:5432 -L 6379:127.0.0.1:6379 user@vps`.
 - **Redis is a bounded, non-persistent cache** (`768mb` dataset / `1g` container by default). AOF and RDB are disabled to avoid write amplification; the worker warms current runs from Postgres on startup.
 - **Postgres 18 volume** is mounted at `/var/lib/postgresql` (the parent, not `/data`) — required by the PG18 image.
 - **`schema.sql` runs only on first init** (empty data volume). To re-apply after changes: `docker compose exec -T postgres psql -U pkpways -d pkpways < schema.sql`, or `docker compose down -v` to wipe and re-init.
 
+### Frontend image
+
+`frontend/Dockerfile` is a three-stage build producing a ~110 MB image, which
+requires `output: "standalone"` in `next.config.ts`.
+
+- The runtime stage runs as a non-root user and contains no source or build tooling.
+- **`public/` and `.next/static` must be copied explicitly** — Next's standalone output
+  omits both. Without them the map renders unstyled and without railway geometry,
+  which looks like an application bug rather than a packaging one.
+- `HOSTNAME=0.0.0.0` is required; Next otherwise binds localhost inside the
+  container and Caddy cannot reach it.
+- `/api/trains` is `force-dynamic`, so no database connection is needed at build time.
+
+### TLS and the reverse proxy
+
+Caddy holds ports 80 and 443 and obtains Let's Encrypt certificates automatically for
+whatever hostname is in the `Caddyfile`. Adding more sites later is a new block —
+one proxy serves any number of hostnames on the same port via SNI.
+
+- **Both ports must be open**, not just 443: the ACME challenge arrives on 80, so
+  closing it breaks certificate *renewal* ~60 days later.
+- **The `caddy_data` volume holds the certificates.** Deleting it forces re-issuance
+  on every restart, which will hit Let's Encrypt's rate limit (5 per domain per week).
+- **Behind Cloudflare:** keep the DNS record **DNS-only (grey cloud)** until the first
+  certificate is issued, or the proxy intercepts the challenge. Afterwards, if you
+  enable proxying, SSL/TLS mode must be **Full (strict)** — the default "Flexible"
+  causes a redirect loop.
+
+Reload the config without dropping connections:
+
 ```bash
-cp .env.example .env        # then fill in passwords + PKP_API_KEY
-docker compose up -d --build
-docker compose ps           # postgres + redis should be (healthy)
-docker compose logs -f data-sync
+docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
+
+### VPS notes (Oracle Cloud)
+
+- **Two firewalls must both allow 80/443**: the VCN Security List *and* the instance's
+  iptables. Oracle's Ubuntu image ends its `INPUT` chain with a blanket `REJECT`, so
+  rules must be *inserted above it* (`iptables -I INPUT <n>`) rather than appended —
+  appending silently does nothing. Persist with `netfilter-persistent save`.
+- **Compose derives the project name from the directory name**, and prefixes volume
+  names with it. Moving the compose file to a differently-named directory makes Compose
+  look for a volume that doesn't exist and **create an empty one — the database appears
+  wiped** while the real data sits untouched under the old name. Pin it explicitly in
+  `.env` if the directory name ever changes:
+
+  ```bash
+  COMPOSE_PROJECT_NAME=db
+  ```
 
 Healthy worker logs look like:
 ```
-Startup: warmed 14715 current run(s) into Redis
-Daily: upserted 7252 train identity row(s)
+Startup: warmed 13282 current run(s) into Redis
+Daily: upserted 9231 train identity row(s)
 Daily: pruned 32450 stale train_run(s)
-Live: seeded 2965 new station name(s)
-Live: 39834 train(s) -> train_runs, 14715 -> Redis (ttl 1800s) [fetch 68s, cycle 83s]
+Live: seeded 2967 new station name(s)
+Live: 38852 train(s) -> train_runs, 13282 -> Redis (ttl 1800s) [fetch 20s, cycle 30s]
 ```
 
 Two numbers to watch on that last line:
@@ -369,7 +476,10 @@ docker compose exec postgres psql -U pkpways -d pkpways -c \
 | `POLL_INTERVAL_SECONDS` | data-sync | default `30` (a floor — see [Data Flow](#data-flow)) |
 | `CACHE_TTL_SECONDS` | data-sync | default `1800` — Redis key TTL. **Must outlive a full poll cycle** (see [Redis cache layout](#redis-cache-layout)) |
 | `REQUEST_TIMEOUT_SECONDS`, `LOG_LEVEL` | data-sync | optional |
-| `DATABASE_URL`, `REDIS_URL` | frontend | in `frontend/.env.local` for local dev (via SSH tunnel) |
+| `DATABASE_URL`, `REDIS_URL` | data-sync, frontend | built by Compose from the values above using the service hostnames `postgres`/`redis`. Only local dev sets them by hand, in `frontend/.env.local`, pointing at an SSH tunnel |
+| `COMPOSE_PROJECT_NAME` | compose | optional — pins volume/container name prefixes (see [Deployment](#-deployment)) |
+
+The public hostname is **not** an environment variable: it lives in the `Caddyfile`, because Caddy requests a certificate for exactly that name.
 
 > **Running the worker standalone (without Docker)** is also supported: it reads `data-sync/.env` and needs `DATABASE_URL` + `REDIS_URL` pointing at `localhost`. In the Compose setup this file is unused — the root `.env` is the single source of truth.
 
@@ -473,13 +583,14 @@ npm run dev
 
 ### Design Philosophy
 
-This is a **portfolio piece** — the design should be stunning:
+The map is the product; everything else stays out of its way.
 
-- **Full-screen map** as the hero element (no unnecessary chrome)
-- **Glassmorphism** panels that slide in/out over the map
-- **Smooth animations** for train markers gliding between positions
-- **Color-coded trains** by carrier (PKP IC = blue, Polregio = red, etc.)
-- **Dark mode map** with custom tile styling
+- **Full-screen map** as the hero element, with no unnecessary chrome
+- **Glassmorphism** panels that slide in and out over the map
+- **Continuous marker movement** between snapshots rather than 15-second jumps
+- **Carrier-coded trains** (PKP IC blue, Polregio red, and so on — see `src/lib/carriers.ts`)
+- **Dark mode** for both the UI and the map tiles
+- **Reduced-motion support** throughout: animation is an enhancement, never the only signal
 
 ---
 

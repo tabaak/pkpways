@@ -4,33 +4,44 @@ Live map of Polish trains. **Read `README.md` first** — it has the full archit
 
 ## What this repo is
 
-A two-part app plus a Docker Compose stack that runs the backend:
+A two-part app plus a Docker Compose stack that runs all of it:
 
 - **`data-sync/`** — Python worker (`main.py`). The **only** thing that calls the PKP PLK API. Polls `/operations` every ~30s and `/schedules` daily, writing into Postgres + Redis.
 - **`frontend/`** — Next.js 16 map UI. Reads Redis/Postgres only through its server read layer; **never** calls the PKP API directly. The browser interpolates live markers continuously between API snapshots and follows the bundled railway geometry.
-- **`docker-compose.yml`** + **`schema.sql`** (repo root) — Postgres 18, Redis 8, and the worker. This is the deploy unit, running on a VPS.
+- **`docker-compose.yml`** + **`schema.sql`** + **`Caddyfile`** (repo root) — five services: `postgres` (18), `redis` (8), `data-sync`, `frontend`, and `caddy`. This is the deploy unit, running on a VPS and serving <https://pkpways.vokh.dev>.
 
 ## Hard rules
 
 - **The API key (`PKP_API_KEY`) lives only in the worker.** Never expose it to the frontend or commit it.
 - **Secrets live in the root `.env`** (gitignored) — one source of truth. Compose injects them into all services; `DATABASE_URL`/`REDIS_URL` use the service hostnames `postgres`/`redis`, **not** `localhost`.
-- **Datastore ports are bound to `127.0.0.1`** on the VPS. Don't expose them publicly without a firewall + strong passwords.
+- **Datastore ports are bound to `127.0.0.1`** on the VPS. Don't expose them publicly without a firewall + strong passwords. The `frontend` service isn't published to the host at all — only `caddy` (80/443) faces the internet.
 - **`schema.sql` auto-runs only on a fresh DB volume.** After editing it, re-apply manually (`docker compose exec -T postgres psql -U pkpways -d pkpways < schema.sql`) or `docker compose down -v` to wipe and re-init — and keep it in sync with any live `ALTER`s.
 
 ## Domain gotchas (confirmed against real API data)
 
 - API **timestamps have no timezone** → treat as **Europe/Warsaw**.
 - **Delays are not a column.** They live per-stop inside `train_runs.stops` (JSONB): `arrivalDelayMinutes` / `departureDelayMinutes`, and these keys are **absent when 0** (treat missing as 0).
-- Everything is keyed by `(scheduleId, orderId)`. Field mappings (`nationalNumber`→number, `commercialCategorySymbol`→type, `carrierCode`→carrier_code) are documented in `README.md`.
-- The worker polls the **whole national fleet** (~40k trains) with full routes, so a cycle is currently about 70–85 seconds; `POLL_INTERVAL_SECONDS` is a floor, not a guarantee.
+- **Two different keys, don't conflate them.** A *run* is `(scheduleId, orderId, operatingDate)` — the date is part of the key because `/operations` returns a rolling ~7-day window in which the same pair recurs daily, so any identifier built from the pair alone **will collide**. *Train identity* uses the stable `(scheduleId, trainOrderId)`. Field mappings (`nationalNumber`→number, `commercialCategorySymbol`→type, `carrierCode`→carrier_code) are documented in `README.md`.
+- The worker polls the **whole national fleet** (~39k runs) with full routes. Measured over 141 recent cycles: **median 30s, p90 49s, range 22–60s** (fetch is 12–51s of that). `POLL_INTERVAL_SECONDS` (default 30) is a floor, not a guarantee — a longer cycle simply starts the next one immediately.
 
 ## Working on the worker
 
 ```bash
 # after editing data-sync/main.py, on the VPS:
 docker compose up -d --build data-sync
-docker compose logs -f data-sync          # expect "Live: N train(s) -> train_runs + Redis"
+docker compose logs -f data-sync
 ```
+
+A healthy cycle logs:
+
+```
+Live: 38852 train(s) -> train_runs, 13282 -> Redis (ttl 1800s) [fetch 20s, cycle 30s]
+```
+
+`-> Redis` should be far smaller than `-> train_runs` (Postgres keeps the whole
+rolling week, Redis only currently-relevant runs). If they match, the
+operating-date filter isn't running. `cycle` must stay well under
+`CACHE_TTL_SECONDS`, or keys expire before their replacements are written.
 
 Local gitignored probe scripts (`operations.py`, `schedules.py`, `schedules.json`) exist for inspecting raw API responses — use them to confirm field names before changing extractors.
 
@@ -48,11 +59,23 @@ npx tsc --noEmit
 npm run build
 ```
 
+Deploying a frontend change (on the VPS):
+
+```bash
+git pull && docker compose up -d --build frontend
+```
+
+The image is a multi-stage standalone build (`frontend/Dockerfile`), which
+requires `output: "standalone"` in `next.config.ts`. Standalone output omits
+`public/` and `.next/static`, so both are copied explicitly — dropping either
+yields a map with no styling or no geometry, which reads as an app bug rather
+than a packaging one.
+
 ## Current status
 
-- **Station geocoding** — completed for 2,953 / 2,964 stations; the remaining stations have no resolved coordinates.
-- **Frontend wiring** — completed through the Next.js `/api/trains` read layer.
-- **Railway geometry** — 7,985 directed station pairs are bundled; 120 documented pairs use straight-line fallback.
+- **Station geocoding** — completed for 2,953 / 2,967 stations; the rest have no resolved coordinates.
+- **Frontend** — deployed and live at <https://pkpways.vokh.dev>, reading through the Next.js `/api/trains` layer.
+- **Railway geometry** — 7,985 directed station pairs bundled: 7,823 routed, 162 straight-line fallbacks.
 
 
 # LLM-CODING-GUIDELINES.md
