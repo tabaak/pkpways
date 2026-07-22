@@ -66,7 +66,8 @@ function drawTrain(
   context: CanvasRenderingContext2D,
   rendered: RenderedTrain,
   point: L.Point,
-  trainIconPath: Path2D
+  trainIconPath: Path2D,
+  dark: boolean
 ) {
   const carrier = getCarrier(rendered.train.carrierId)
   const bearing = (rendered.bearing * Math.PI) / 180
@@ -74,25 +75,42 @@ function drawTrain(
   context.save()
   context.translate(point.x, point.y)
 
-  // Direction triangle. It deliberately has no shadow: shadows are one of the
-  // paint costs that made the old DOM fleet expensive on touch devices.
   context.rotate(bearing)
+  context.fillStyle = 'rgba(0, 0, 0, 0.3)'
+  context.beginPath()
+  context.moveTo(0, -21)
+  context.lineTo(-6, -12)
+  context.lineTo(6, -12)
+  context.closePath()
+  context.fill()
   context.fillStyle = carrier.color
   context.beginPath()
-  context.moveTo(0, -19)
-  context.lineTo(-6, -9)
-  context.lineTo(6, -9)
+  context.moveTo(0, -22)
+  context.lineTo(-6, -13)
+  context.lineTo(6, -13)
   context.closePath()
   context.fill()
   context.restore()
 
+  // Match the old 26px border-box marker: 13px outer radius, 2px border,
+  // 11px carrier-colored interior. Drawing the border as a separate disc
+  // avoids Canvas strokes extending beyond the intended size.
   context.beginPath()
-  context.fillStyle = carrier.color
+  context.fillStyle = 'rgba(0, 0, 0, 0.35)'
+  context.arc(point.x, point.y + 2, 12.5, 0, Math.PI * 2)
+  context.fill()
+
+  context.beginPath()
+  context.fillStyle = dark
+    ? 'rgba(255, 255, 255, 0.78)'
+    : 'rgba(255, 255, 255, 0.9)'
   context.arc(point.x, point.y, 13, 0, Math.PI * 2)
   context.fill()
-  context.lineWidth = 2
-  context.strokeStyle = 'rgba(255, 255, 255, 0.9)'
-  context.stroke()
+
+  context.beginPath()
+  context.fillStyle = carrier.color
+  context.arc(point.x, point.y, 11, 0, Math.PI * 2)
+  context.fill()
 
   context.save()
   context.translate(point.x - 7.5, point.y - 7.5)
@@ -105,14 +123,17 @@ function drawTrain(
     const label = `+${rendered.train.delay}`
     context.font = '700 10px system-ui, sans-serif'
     const width = Math.max(16, context.measureText(label).width + 8)
-    const x = point.x + 8
-    const y = point.y - 14
+    const x = point.x + 25 - width
+    const y = point.y - 23
+    roundedRect(context, x, y + 1, width, 16, 8)
+    context.fillStyle = 'rgba(0, 0, 0, 0.32)'
+    context.fill()
     roundedRect(context, x, y, width, 16, 8)
+    context.fillStyle = '#ffffff'
+    context.fill()
+    roundedRect(context, x + 1.5, y + 1.5, width - 3, 13, 6.5)
     context.fillStyle = '#ef4444'
     context.fill()
-    context.lineWidth = 1.5
-    context.strokeStyle = '#ffffff'
-    context.stroke()
     context.fillStyle = '#ffffff'
     context.textAlign = 'center'
     context.textBaseline = 'middle'
@@ -256,6 +277,7 @@ export function CanvasTrainLayer({
 
       const bounds = map.getBounds().pad(VIEWPORT_PADDING)
       const visible: RenderedTrain[] = []
+      const dark = document.documentElement.classList.contains('dark')
       for (const item of renderedRef.current) {
         if (!bounds.contains([item.position.lat, item.position.lng])) {
           item.point = null
@@ -273,7 +295,7 @@ export function CanvasTrainLayer({
         }
         item.point = point
         visible.push(item)
-        drawTrain(context, item, point, trainIconPath)
+        drawTrain(context, item, point, trainIconPath, dark)
       }
       visibleRef.current = visible
       canvas.dataset.markerCount = String(visible.length)
