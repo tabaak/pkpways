@@ -32,9 +32,12 @@ import { CanvasTrainLayer, type TrainHitTest } from './CanvasTrainLayer'
 import { LocationIcon, TRAIN_PATH } from './icons'
 
 const POLAND_CENTER: [number, number] = [52.1, 19.4]
+/* Padded well past Poland's edges so the details panel (and other overlays)
+   never trap content against the pan limit — eastern routes sit under the
+   right-hand panel unless the map can be dragged further west. */
 const POLAND_BOUNDS: [[number, number], [number, number]] = [
-  [48.6, 13.6],
-  [55.2, 24.6],
+  [46.8, 9.6],
+  [57.0, 30.0],
 ]
 
 const TILES: Record<Theme, { url: string; attribution: string }> = {
