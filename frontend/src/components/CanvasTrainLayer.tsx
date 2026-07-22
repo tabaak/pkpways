@@ -239,6 +239,7 @@ export function CanvasTrainLayer({
 
     const context = canvas.getContext('2d')
     if (!context) return () => canvas.remove()
+    const mapContainer = map.getContainer()
     const trainIconPath = new Path2D(TRAIN_PATH)
     const tooltip = L.tooltip({
       direction: 'top',
@@ -324,9 +325,10 @@ export function CanvasTrainLayer({
     hitTestRef.current = performHitTest
 
     const showTooltip = (event: L.LeafletMouseEvent) => {
-      if (window.matchMedia('(pointer: coarse)').matches) return
       const id = performHitTest(event.containerPoint)
       const item = visibleRef.current.find((candidate) => candidate.train.id === id)
+      mapContainer.classList.toggle('train-marker-hover', Boolean(item))
+      if (window.matchMedia('(pointer: coarse)').matches) return
       if (!item) {
         tooltip.close()
         return
@@ -406,7 +408,10 @@ export function CanvasTrainLayer({
     map.on('zoomanim', animateZoom)
     map.on('zoomend', finishZoom)
     map.on('mousemove', showTooltip)
-    const hideTooltip = () => tooltip.close()
+    const hideTooltip = () => {
+      mapContainer.classList.remove('train-marker-hover')
+      tooltip.close()
+    }
     map.on('mouseout', hideTooltip)
     if (!reducedMotion) updatePositions()
 
@@ -421,6 +426,7 @@ export function CanvasTrainLayer({
       map.off('zoomend', finishZoom)
       map.off('mousemove', showTooltip)
       map.off('mouseout', hideTooltip)
+      mapContainer.classList.remove('train-marker-hover')
       tooltip.close()
       if (drawRequestId != null) window.cancelAnimationFrame(drawRequestId)
       if (zoomRequestId != null) window.cancelAnimationFrame(zoomRequestId)

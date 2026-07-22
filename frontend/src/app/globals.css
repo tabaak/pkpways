@@ -310,6 +310,14 @@ html.dark .glass-strong {
   pointer-events: none;
 }
 
+.leaflet-container.train-marker-hover {
+  cursor: pointer;
+}
+
+.leaflet-dragging .leaflet-container.train-marker-hover {
+  cursor: grabbing;
+}
+
 /* ---------------------------------------------------------------------------
    Selected train marker (rendered as a Leaflet divIcon)
 --------------------------------------------------------------------------- */
