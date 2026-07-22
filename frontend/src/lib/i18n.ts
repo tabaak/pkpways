@@ -50,6 +50,20 @@ const DICT = {
     pl: 'Nie udało się ustalić lokalizacji.',
     en: 'Unable to find your location.',
   },
+  aboutLabel: { pl: 'O danych', en: 'About the data' },
+  disclaimerTitle: {
+    pl: 'Skąd pochodzą pozycje pociągów',
+    en: 'Where the train positions come from',
+  },
+  disclaimerBody: {
+    pl: 'Pozycje pociągów na mapie nie pochodzą z GPS. Są teoretycznym oszacowaniem wyliczonym z rozkładu jazdy i raportowanych opóźnień — pokazujemy, gdzie pociąg powinien się znajdować w danej chwili.',
+    en: 'Train positions on this map do not come from onboard GPS. They are a theoretical estimate calculated from the timetable and reported delays — we show where a train should be at a given moment.',
+  },
+  disclaimerNote: {
+    pl: 'Rzeczywiste położenie pociągu może się różnić. Nie korzystaj z tych danych do planowania przesiadek ani w sytuacjach krytycznych.',
+    en: 'The real position may differ. Do not rely on this data for catching connections or in critical situations.',
+  },
+  gotIt: { pl: 'Rozumiem', en: 'Got it' },
   searchLabel: { pl: 'Szukaj pociągu', en: 'Search train' },
   searchPlaceholder: {
     pl: 'Szukaj numeru pociągu…',

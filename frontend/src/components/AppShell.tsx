@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useState } from 'react'
 import { useApp } from '@/app/providers'
 import type { TrainLive } from '@/lib/types'
+import { InfoButton } from './InfoButton'
 import { TopBar } from './TopBar'
 import { TrainDetailsPanel } from './TrainDetailsPanel'
 import { TrainGlyph } from './icons'
@@ -122,6 +123,10 @@ export function AppShell() {
       />
 
       <TopBar trains={trains} onSelect={focusTrain} />
+
+      {/* Data disclaimer. Hidden while a train is picked, since the details
+          panel takes over that corner on desktop. */}
+      {!selected && <InfoButton />}
 
       {selected && (
         <TrainDetailsPanel
