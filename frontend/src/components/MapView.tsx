@@ -28,6 +28,7 @@ import {
 } from '@/lib/railGeometry'
 import { getTrainIdentity } from '@/lib/trainIdentity'
 import type { LatLng, Theme, TrainLive } from '@/lib/types'
+import { CanvasTrainLayer, type TrainHitTest } from './CanvasTrainLayer'
 import { LocationIcon, TRAIN_PATH } from './icons'
 
 const POLAND_CENTER: [number, number] = [52.1, 19.4]
@@ -124,7 +125,13 @@ function DebugOverlay({
       if (elapsed >= 1000) {
         setFrameStats({
           fps: Math.round((frameCount * 1000) / elapsed),
-          markers: document.querySelectorAll('.train-marker-wrapper').length,
+          markers:
+            document.querySelectorAll('.train-marker-wrapper').length +
+            Number(
+              document
+                .querySelector('.leaflet-train-canvas')
+                ?.getAttribute('data-marker-count') ?? 0
+            ),
         })
         frameCount = 0
         sampledAt = now
@@ -403,75 +410,6 @@ function SelectedRoute({
   )
 }
 
-/** Fraction of the viewport kept as an off-screen margin, so markers are
- *  already mounted when a pan brings them into view instead of popping in. */
-const VIEWPORT_PADDING = 0.25
-
-type Viewport = { bounds: L.LatLngBounds; zoom: number }
-
-/** All live train markers, limited to the ones actually on screen.
- *  Every mounted marker costs ~5 DOM nodes plus a position write per tick, so
- *  with the full country's worth of trains this culling is what keeps a
- *  zoomed-in view affordable on a phone. */
-function TrainLayer({
-  trains,
-  railGeometry,
-  sampledAt,
-  receivedAt,
-  reducedMotion,
-  selectedId,
-  onSelect,
-}: {
-  trains: TrainLive[]
-  railGeometry: RailGeometryAsset | null
-  sampledAt: number
-  receivedAt: number
-  reducedMotion: boolean
-  selectedId: string | null
-  onSelect: (id: string) => void
-}) {
-  const map = useMap()
-  const readViewport = (): Viewport => ({
-    bounds: map.getBounds().pad(VIEWPORT_PADDING),
-    zoom: map.getZoom(),
-  })
-  const [viewport, setViewport] = useState<Viewport>(readViewport)
-
-  useMapEvents({
-    moveend: () => setViewport(readViewport()),
-    zoomend: () => setViewport(readViewport()),
-  })
-
-  useEffect(() => {
-    setFrameInterval(frameIntervalForZoom(viewport.zoom))
-  }, [viewport.zoom])
-
-  const visible = useMemo(
-    () =>
-      trains.filter((train) =>
-        viewport.bounds.contains([train.position.lat, train.position.lng])
-      ),
-    [trains, viewport.bounds]
-  )
-
-  return (
-    <>
-      {visible.map((train) => (
-        <TrainMarker
-          key={train.id}
-          train={train}
-          railGeometry={railGeometry}
-          sampledAt={sampledAt}
-          receivedAt={receivedAt}
-          reducedMotion={reducedMotion}
-          selected={train.id === selectedId}
-          onSelect={onSelect}
-        />
-      ))}
-    </>
-  )
-}
-
 /** Pans/zooms the map to a train when it's picked from search. Keyed off a
  *  nonce so re-selecting the same train still re-centers. */
 function MapFocus({
@@ -498,7 +436,13 @@ function MapFocus({
 }
 
 /** Reacts to theme change / mount to keep Leaflet sized correctly. */
-function MapEffects({ onBackgroundClick }: { onBackgroundClick: () => void }) {
+function MapEffects({
+  hitTestRef,
+  onMapClick,
+}: {
+  hitTestRef: React.MutableRefObject<TrainHitTest | null>
+  onMapClick: (id: string | null) => void
+}) {
   const map = useMap()
   useEffect(() => {
     // A tick after mount avoids a mis-sized map in some layout timings.
@@ -507,7 +451,9 @@ function MapEffects({ onBackgroundClick }: { onBackgroundClick: () => void }) {
   }, [map])
 
   useMapEvents({
-    click: () => onBackgroundClick(),
+    click: (event) =>
+      onMapClick(hitTestRef.current?.(event.containerPoint) ?? null),
+    zoomend: () => setFrameInterval(frameIntervalForZoom(map.getZoom())),
   })
   return null
 }
@@ -672,6 +618,7 @@ export default function MapView({
 }) {
   const tiles = TILES[theme]
   const reducedMotion = useReducedMotion()
+  const hitTestRef = useRef<TrainHitTest | null>(null)
   const [debugEnabled] = useState(
     () => new URLSearchParams(window.location.search).get('debug') === '1'
   )
@@ -722,7 +669,7 @@ export default function MapView({
 
       <ZoomControl position="bottomleft" />
       <LocationControl reducedMotion={reducedMotion} hidden={Boolean(selected)} />
-      <MapEffects onBackgroundClick={() => onSelect(null)} />
+      <MapEffects hitTestRef={hitTestRef} onMapClick={onSelect} />
       {debugEnabled && (
         <DebugOverlay
           parseDurationMs={parseDurationMs}
@@ -759,14 +706,13 @@ export default function MapView({
           onSelect={onSelect}
         />
       ) : (
-        <TrainLayer
+        <CanvasTrainLayer
           trains={trains}
           railGeometry={railGeometry}
           sampledAt={sampledAt}
           receivedAt={receivedAt}
           reducedMotion={reducedMotion}
-          selectedId={selectedId}
-          onSelect={onSelect}
+          hitTestRef={hitTestRef}
         />
       )}
     </MapContainer>
