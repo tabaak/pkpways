@@ -140,7 +140,8 @@ export function TrainDetailsPanel({
             const passed = i <= train.fromIndex
             const isOrigin = i === 0
             const isDest = i === train.stops.length - 1
-            const activeSegment = i === train.toIndex // connector above is active
+            const isAboveActive = i === train.toIndex
+            const isBelowActive = i === train.fromIndex
 
             return (
               <li key={`${stop.stationId}:${i}`} className="flex gap-3">
@@ -151,8 +152,8 @@ export function TrainDetailsPanel({
                     <span
                       className="w-0.5 flex-1"
                       style={{
-                        background: activeSegment
-                          ? `linear-gradient(${carrier.color}, ${carrier.color}55)`
+                        background: isAboveActive
+                          ? `linear-gradient(to bottom, ${carrier.color}77, rgba(100,116,139,0.25))`
                           : passed
                             ? carrier.color
                             : 'rgba(100,116,139,0.25)',
@@ -175,8 +176,9 @@ export function TrainDetailsPanel({
                     <span
                       className="w-0.5 flex-1"
                       style={{
-                        background:
-                          i < train.fromIndex
+                        background: isBelowActive
+                          ? `linear-gradient(to bottom, ${carrier.color}, ${carrier.color}77)`
+                          : i < train.fromIndex
                             ? carrier.color
                             : 'rgba(100,116,139,0.25)',
                       }}
