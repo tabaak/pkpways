@@ -506,16 +506,27 @@ The app reads live data from Redis/Postgres (never the PKP API directly).
   station hops with routed railway geometry; missing or flagged pairs remain
   straight-line fallbacks. Keeping the asset in the frontend bundle prevents a
   static-file request or cache failure from degrading every route to chords.
-- A single shared `requestAnimationFrame` loop advances every marker at about
-  20 FPS between API snapshots. Decoded segment distances are cached and the
-  current point is found with binary search, avoiding repeated full-polyline
-  calculations for hundreds of trains.
+- Unselected trains are rendered by `src/components/CanvasTrainLayer.tsx` into
+  one Leaflet-managed Canvas pane. This avoids hundreds of animated DOM
+  `DivIcon` nodes during pan and pinch-zoom while preserving carrier colors,
+  train glyphs, direction arrows, delay badges, and nearest-train selection.
+  Only the selected train remains a DOM marker so its focused state and details
+  interaction stay rich.
+- The Canvas layer keeps marker symbols fixed-size during zoom: Leaflet's
+  zoom easing is applied to projected marker positions rather than scaling the
+  raster icons. Interpolation updates are shared by the Canvas fleet, while
+  viewport drawing clips trains outside the current map bounds.
 - `prefers-reduced-motion: reduce` disables continuous movement and the selected
   marker pulse; those users receive discrete positions when a snapshot arrives.
 - Scans every current Redis record and returns every train that is en route and
   has at least two located stations. The rolling ~34–40k Postgres dataset is not
   sent to the browser; finished, not-yet-started, and unmappable runs are
   filtered out first.
+
+For a temporary performance readout, append `?debug=1` to the map URL. The
+overlay reports FPS, the number of drawn trains, the current animation interval,
+JSON parsing duration, and supported Long Task measurements. It is disabled for
+ordinary visits.
 
 `pg.Pool` and `ioredis` clients are singletons pinned to `globalThis` so hot-reload doesn't leak connections.
 
@@ -588,6 +599,8 @@ The map is the product; everything else stays out of its way.
 - **Full-screen map** as the hero element, with no unnecessary chrome
 - **Glassmorphism** panels that slide in and out over the map
 - **Continuous marker movement** between snapshots rather than 15-second jumps
+- **Canvas-rendered train fleet** for smooth pan and pinch-zoom performance;
+  the selected train keeps the existing interactive DOM marker
 - **Carrier-coded trains** (PKP IC blue, Polregio red, and so on — see `src/lib/carriers.ts`)
 - **Dark mode** for both the UI and the map tiles
 - **Reduced-motion support** throughout: animation is an enhancement, never the only signal
@@ -599,9 +612,14 @@ The map is the product; everything else stays out of its way.
 Open items, roughly by how much they'd bite:
 
 - **Client animation is schedule-derived, not GPS.** Between 15s API polls, markers advance smoothly along the current routed segment using its effective travel duration. A fresh poll corrects the snapshot, but the underlying position remains an interpolation of timetable and delay data.
-- **No viewport culling or clustering.** With no selection, every active,
-  placeable train is rendered, so marker cost grows with the number of
-  simultaneous runs. Selecting a train intentionally isolates its marker.
+- **No clustering.** The Canvas layer draws every placeable train that intersects
+  the current screen, but does not aggregate overlapping trains at low zoom.
+  Dense areas can therefore still look crowded; clicking selects the nearest
+  train and the search field remains available when icons overlap.
+- **Canvas markers are not individual DOM elements.** Unselected trains do not
+  expose one HTML node each to screen readers or CSS hover states. The map still
+  supports pointer/touch hit-testing, keyboard-accessible train search, and a
+  DOM marker with full details for the selected train.
 - **The full route ships with every marker.** Only the *selected* train needs its route; splitting that into `/api/trains/[id]` would shrink the payload substantially.
 
 ---
