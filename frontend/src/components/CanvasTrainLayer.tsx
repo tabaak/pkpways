@@ -31,6 +31,15 @@ type RenderedTrain = {
   point: L.Point | null
 }
 
+type ZoomAnimationEvent = L.LeafletEvent & {
+  center: L.LatLng
+  zoom: number
+}
+
+type AnimatedMap = L.Map & {
+  _getNewPixelOrigin: (center: L.LatLng, zoom: number) => L.Point
+}
+
 const VIEWPORT_PADDING = 0.25
 const MARKER_RADIUS = 17
 const TOUCH_RADIUS = 22
@@ -153,8 +162,8 @@ function tooltipContent(train: TrainLive): HTMLElement {
 
 /**
  * Renders the unselected train fleet into one canvas. The canvas is deliberately
- * a direct child of the map container, so it follows container coordinates while
- * Leaflet pans/zooms instead of requiring one DOM transform per train.
+ * managed as one Leaflet pane element, so zooming transforms the whole fleet
+ * instead of requiring one DOM transform per train.
  */
 export function CanvasTrainLayer({
   trains,
@@ -188,10 +197,13 @@ export function CanvasTrainLayer({
 
   useEffect(() => {
     const canvas = document.createElement('canvas')
-    canvas.className = 'leaflet-train-canvas'
+    canvas.className = 'leaflet-train-canvas leaflet-zoom-animated'
     canvas.setAttribute('role', 'img')
     canvas.setAttribute('aria-label', `${t('liveTrains')}: ${trains.length}`)
-    map.getContainer().appendChild(canvas)
+    const pane = map.getPane('trainCanvasPane') ?? map.createPane('trainCanvasPane')
+    pane.style.zIndex = '550'
+    pane.style.pointerEvents = 'none'
+    pane.appendChild(canvas)
 
     const context = canvas.getContext('2d')
     if (!context) return () => canvas.remove()
@@ -209,6 +221,9 @@ export function CanvasTrainLayer({
     let drawQueued = false
     let drawRequestId: number | null = null
     let disposed = false
+    let zooming = false
+    let baseCenter = map.getCenter()
+    let baseZoom = map.getZoom()
 
     const resize = () => {
       const size = map.getSize()
@@ -223,7 +238,7 @@ export function CanvasTrainLayer({
     }
 
     const requestDraw = () => {
-      if (drawQueued) return
+      if (drawQueued || zooming) return
       drawQueued = true
       drawRequestId = window.requestAnimationFrame(() => {
         drawRequestId = null
@@ -234,7 +249,9 @@ export function CanvasTrainLayer({
     }
 
     const draw = () => {
+      if (zooming) return
       if (width !== map.getSize().x || height !== map.getSize().y) resize()
+      L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0, 0]).round())
       context.clearRect(0, 0, width, height)
 
       const bounds = map.getBounds().pad(VIEWPORT_PADDING)
@@ -260,6 +277,8 @@ export function CanvasTrainLayer({
       }
       visibleRef.current = visible
       canvas.dataset.markerCount = String(visible.length)
+      baseCenter = map.getCenter()
+      baseZoom = map.getZoom()
     }
 
     const recomputePositions = () => {
@@ -299,9 +318,43 @@ export function CanvasTrainLayer({
       }
     }
 
+    const beginZoom = () => {
+      zooming = true
+      baseCenter = map.getCenter()
+      baseZoom = map.getZoom()
+    }
+
+    const transformForZoom = (center: L.LatLng, zoom: number) => {
+      const scale = map.getZoomScale(zoom, baseZoom)
+      const viewHalf = map.getSize().multiplyBy(0.5)
+      const currentCenterPoint = map.project(baseCenter, zoom)
+      const topLeftOffset = viewHalf
+        .multiplyBy(-scale)
+        .add(currentCenterPoint)
+        .subtract((map as AnimatedMap)._getNewPixelOrigin(center, zoom))
+      L.DomUtil.setTransform(canvas, topLeftOffset, scale)
+    }
+
+    const transformDuringZoom = () => {
+      transformForZoom(map.getCenter(), map.getZoom())
+    }
+
+    const animateZoom = (event: ZoomAnimationEvent) => {
+      transformForZoom(event.center, event.zoom)
+    }
+
+    const finishZoom = () => {
+      zooming = false
+      requestDraw()
+    }
+
     resize()
     recomputePositions()
-    map.on('move zoom resize', requestDraw)
+    map.on('move resize', requestDraw)
+    map.on('zoomstart', beginZoom)
+    map.on('zoom', transformDuringZoom)
+    map.on('zoomanim', animateZoom)
+    map.on('zoomend', finishZoom)
     map.on('mousemove', showTooltip)
     const hideTooltip = () => tooltip.close()
     map.on('mouseout', hideTooltip)
@@ -311,7 +364,11 @@ export function CanvasTrainLayer({
     return () => {
       disposed = true
       hitTestRef.current = null
-      map.off('move zoom resize', requestDraw)
+      map.off('move resize', requestDraw)
+      map.off('zoomstart', beginZoom)
+      map.off('zoom', transformDuringZoom)
+      map.off('zoomanim', animateZoom)
+      map.off('zoomend', finishZoom)
       map.off('mousemove', showTooltip)
       map.off('mouseout', hideTooltip)
       tooltip.close()

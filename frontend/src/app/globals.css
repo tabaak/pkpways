@@ -304,8 +304,9 @@ html.dark .glass-strong {
    for the single selected train, where they provide the rich focused state. */
 .leaflet-train-canvas {
   position: absolute;
-  inset: 0;
-  z-index: 550;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
   pointer-events: none;
 }
 
