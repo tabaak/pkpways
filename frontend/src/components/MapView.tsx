@@ -94,9 +94,11 @@ function subscribeToAnimationFrame(listener: () => void): () => void {
 function DebugOverlay({
   parseDurationMs,
   reducedMotion,
+  testLabel,
 }: {
   parseDurationMs: number | null
   reducedMotion: boolean
+  testLabel: string
 }) {
   const [frameStats, setFrameStats] = useState({ fps: 0, markers: 0 })
   const [longTasks, setLongTasks] = useState<{
@@ -170,6 +172,7 @@ function DebugOverlay({
     >
       <div>FPS {frameStats.fps}</div>
       <div>markers {frameStats.markers}</div>
+      <div>test {testLabel}</div>
       <div>tick {tick}</div>
       <div>JSON.parse {parse}</div>
       <div>long last/max {longTask}</div>
@@ -420,6 +423,7 @@ function TrainLayer({
   receivedAt,
   reducedMotion,
   selectedId,
+  markerLimit,
   onSelect,
 }: {
   trains: TrainLive[]
@@ -428,6 +432,7 @@ function TrainLayer({
   receivedAt: number
   reducedMotion: boolean
   selectedId: string | null
+  markerLimit: number | null
   onSelect: (id: string) => void
 }) {
   const map = useMap()
@@ -446,13 +451,12 @@ function TrainLayer({
     setFrameInterval(frameIntervalForZoom(viewport.zoom))
   }, [viewport.zoom])
 
-  const visible = useMemo(
-    () =>
-      trains.filter((train) =>
+  const visible = useMemo(() => {
+    const inViewport = trains.filter((train) =>
         viewport.bounds.contains([train.position.lat, train.position.lng])
-      ),
-    [trains, viewport.bounds]
-  )
+      )
+    return markerLimit == null ? inViewport : inViewport.slice(0, markerLimit)
+  }, [markerLimit, trains, viewport.bounds])
 
   return (
     <>
@@ -672,9 +676,35 @@ export default function MapView({
 }) {
   const tiles = TILES[theme]
   const reducedMotion = useReducedMotion()
-  const [debugEnabled] = useState(
-    () => new URLSearchParams(window.location.search).get('debug') === '1'
-  )
+  const [diagnostics] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    const debugEnabled = params.get('debug') === '1'
+    const markerSetting = params.get('markers')
+    const parsedLimit = markerSetting == null ? Number.NaN : Number(markerSetting)
+    const markersEnabled = !debugEnabled || markerSetting !== 'off'
+    const markerLimit =
+      debugEnabled && Number.isFinite(parsedLimit) && parsedLimit >= 0
+        ? Math.floor(parsedLimit)
+        : null
+    const animationDisabled = debugEnabled && params.get('animation') === 'off'
+    const tilesEnabled = !debugEnabled || params.get('tiles') !== 'off'
+    const testLabel = [
+      markersEnabled
+        ? `${markerLimit == null ? 'all' : markerLimit} ${animationDisabled ? 'static' : 'live'}`
+        : 'no markers',
+      tilesEnabled ? 'tiles' : 'no tiles',
+    ].join(' / ')
+
+    return {
+      animationDisabled,
+      debugEnabled,
+      markerLimit,
+      markersEnabled,
+      testLabel,
+      tilesEnabled,
+    }
+  })
+  const markerMotionDisabled = reducedMotion || diagnostics.animationDisabled
   const selected = trains.find((t) => t.id === selectedId) ?? null
   const [railGeometry, setRailGeometry] = useState<RailGeometryAsset | null>(null)
   const [railGeometryLoading, setRailGeometryLoading] = useState(true)
@@ -712,21 +742,24 @@ export default function MapView({
       className="h-full w-full"
     >
       {/* Keyed by theme so tiles swap cleanly on toggle. */}
-      <TileLayer
-        key={theme}
-        url={tiles.url}
-        attribution={tiles.attribution}
-        subdomains="abcd"
-        maxZoom={20}
-      />
+      {diagnostics.tilesEnabled && (
+        <TileLayer
+          key={theme}
+          url={tiles.url}
+          attribution={tiles.attribution}
+          subdomains="abcd"
+          maxZoom={20}
+        />
+      )}
 
       <ZoomControl position="bottomleft" />
       <LocationControl reducedMotion={reducedMotion} hidden={Boolean(selected)} />
       <MapEffects onBackgroundClick={() => onSelect(null)} />
-      {debugEnabled && (
+      {diagnostics.debugEnabled && (
         <DebugOverlay
           parseDurationMs={parseDurationMs}
-          reducedMotion={reducedMotion}
+          reducedMotion={markerMotionDisabled}
+          testLabel={diagnostics.testLabel}
         />
       )}
       <MapFocus
@@ -747,28 +780,30 @@ export default function MapView({
 
       {/* A selected train is shown alone, so it never needs culling — and must
           stay visible even when the details panel has pushed it off-screen. */}
-      {selected ? (
-        <TrainMarker
-          key={selected.id}
-          train={selected}
-          railGeometry={railGeometry}
-          sampledAt={sampledAt}
-          receivedAt={receivedAt}
-          reducedMotion={reducedMotion}
-          selected
-          onSelect={onSelect}
-        />
-      ) : (
-        <TrainLayer
-          trains={trains}
-          railGeometry={railGeometry}
-          sampledAt={sampledAt}
-          receivedAt={receivedAt}
-          reducedMotion={reducedMotion}
-          selectedId={selectedId}
-          onSelect={onSelect}
-        />
-      )}
+      {diagnostics.markersEnabled &&
+        (selected ? (
+          <TrainMarker
+            key={selected.id}
+            train={selected}
+            railGeometry={railGeometry}
+            sampledAt={sampledAt}
+            receivedAt={receivedAt}
+            reducedMotion={markerMotionDisabled}
+            selected
+            onSelect={onSelect}
+          />
+        ) : (
+          <TrainLayer
+            trains={trains}
+            railGeometry={railGeometry}
+            sampledAt={sampledAt}
+            receivedAt={receivedAt}
+            reducedMotion={markerMotionDisabled}
+            selectedId={selectedId}
+            markerLimit={diagnostics.markerLimit}
+            onSelect={onSelect}
+          />
+        ))}
     </MapContainer>
   )
 }
