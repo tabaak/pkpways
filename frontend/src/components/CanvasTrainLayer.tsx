@@ -207,6 +207,8 @@ export function CanvasTrainLayer({
     let height = 0
     let devicePixelRatio = 1
     let drawQueued = false
+    let drawRequestId: number | null = null
+    let disposed = false
 
     const resize = () => {
       const size = map.getSize()
@@ -223,8 +225,10 @@ export function CanvasTrainLayer({
     const requestDraw = () => {
       if (drawQueued) return
       drawQueued = true
-      window.requestAnimationFrame(() => {
+      drawRequestId = window.requestAnimationFrame(() => {
+        drawRequestId = null
         drawQueued = false
+        if (disposed) return
         draw()
       })
     }
@@ -279,7 +283,7 @@ export function CanvasTrainLayer({
       const id = performHitTest(event.containerPoint)
       const item = visibleRef.current.find((candidate) => candidate.train.id === id)
       if (!item) {
-        map.closeTooltip()
+        tooltip.close()
         return
       }
       tooltip.setLatLng(item.position).setContent(tooltipContent(item.train)).openOn(map)
@@ -299,17 +303,19 @@ export function CanvasTrainLayer({
     recomputePositions()
     map.on('move zoom resize', requestDraw)
     map.on('mousemove', showTooltip)
-    const hideTooltip = () => map.closeTooltip()
+    const hideTooltip = () => tooltip.close()
     map.on('mouseout', hideTooltip)
     if (!reducedMotion) updatePositions()
 
     drawRef.current = requestDraw
     return () => {
+      disposed = true
       hitTestRef.current = null
       map.off('move zoom resize', requestDraw)
       map.off('mousemove', showTooltip)
       map.off('mouseout', hideTooltip)
-      map.closeTooltip()
+      tooltip.close()
+      if (drawRequestId != null) window.cancelAnimationFrame(drawRequestId)
       if (animationFrameRef.current != null) window.clearTimeout(animationFrameRef.current)
       canvas.remove()
       drawRef.current = null
