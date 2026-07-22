@@ -111,6 +111,13 @@ function drawTrain(
   context.arc(point.x, point.y + 2, 12.5, 0, Math.PI * 2)
   context.fill()
 
+  // CSS paints a translucent border over the element's carrier-colored
+  // background, so the ring retains a subtle tint from the train color.
+  context.beginPath()
+  context.fillStyle = carrier.color
+  context.arc(point.x, point.y, 13, 0, Math.PI * 2)
+  context.fill()
+
   context.beginPath()
   context.fillStyle = dark
     ? 'rgba(255, 255, 255, 0.78)'
