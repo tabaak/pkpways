@@ -50,6 +50,10 @@ const DICT = {
     pl: 'Nie udało się ustalić lokalizacji.',
     en: 'Unable to find your location.',
   },
+  locationInsecure: {
+    pl: 'Lokalizacja wymaga połączenia HTTPS.',
+    en: 'Location requires a secure (HTTPS) connection.',
+  },
   aboutLabel: { pl: 'O danych', en: 'About the data' },
   disclaimerTitle: {
     pl: 'Skąd pochodzą pozycje pociągów',

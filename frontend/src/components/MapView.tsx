@@ -505,6 +505,15 @@ function LocationControl({
       return
     }
 
+    // Safari only exposes geolocation over HTTPS — it has no localhost
+    // exemption like Chrome/Firefox — and rejects with PERMISSION_DENIED
+    // without ever prompting. Report the real reason instead.
+    if (!window.isSecureContext) {
+      setStatus('error')
+      setErrorMessage(t('locationInsecure'))
+      return
+    }
+
     setStatus('locating')
     setErrorMessage('')
     navigator.geolocation.getCurrentPosition(
