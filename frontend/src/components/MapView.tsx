@@ -463,6 +463,14 @@ function MapEffects({
 
 type LocationStatus = 'idle' | 'locating' | 'active' | 'error'
 
+/**
+ * Devices answer the first geolocation callback with a coarse Wi-Fi/cell
+ * estimate and only converge onto GNSS over the next few seconds, so we keep
+ * watching until the fix is this good or the window below runs out.
+ */
+const GOOD_ACCURACY_M = 15
+const CONVERGENCE_WINDOW_MS = 30_000
+
 /** Quiet right-side GPS control and the user's last resolved browser position. */
 function LocationControl({
   reducedMotion,
@@ -481,6 +489,22 @@ function LocationControl({
   } | null>(null)
   const [status, setStatus] = useState<LocationStatus>('idle')
   const [errorMessage, setErrorMessage] = useState('')
+  const watchRef = useRef<number | null>(null)
+  const windowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const bestAccuracyRef = useRef(Infinity)
+
+  const stopWatching = () => {
+    if (watchRef.current !== null) {
+      navigator.geolocation.clearWatch(watchRef.current)
+      watchRef.current = null
+    }
+    if (windowTimerRef.current !== null) {
+      clearTimeout(windowTimerRef.current)
+      windowTimerRef.current = null
+    }
+  }
+
+  useEffect(() => stopWatching, [])
 
   useEffect(() => {
     const control = new L.Control({ position: 'bottomright' })
@@ -514,22 +538,45 @@ function LocationControl({
       return
     }
 
+    // A second click restarts the convergence rather than stacking watches.
+    stopWatching()
+    bestAccuracyRef.current = Infinity
     setStatus('locating')
     setErrorMessage('')
-    navigator.geolocation.getCurrentPosition(
+
+    windowTimerRef.current = setTimeout(stopWatching, CONVERGENCE_WINDOW_MS)
+
+    watchRef.current = navigator.geolocation.watchPosition(
       ({ coords }) => {
-        const next = {
+        // Later fixes are not monotonically better; ignore the ones that walk
+        // accuracy backwards so the circle only ever tightens.
+        if (coords.accuracy > bestAccuracyRef.current) return
+
+        const isFirstFix = bestAccuracyRef.current === Infinity
+        bestAccuracyRef.current = coords.accuracy
+        setPosition({
           lat: coords.latitude,
           lng: coords.longitude,
           accuracy: coords.accuracy,
-        }
-        setPosition(next)
+        })
         setStatus('active')
-        const zoom = Math.max(map.getZoom(), 13)
-        if (reducedMotion) map.setView([next.lat, next.lng], zoom)
-        else map.flyTo([next.lat, next.lng], zoom, { duration: 0.9 })
+
+        // Only the first fix moves the viewport — re-flying on every refinement
+        // would yank the map around while the user is reading it.
+        if (isFirstFix) {
+          const target: [number, number] = [coords.latitude, coords.longitude]
+          const zoom = Math.max(map.getZoom(), 13)
+          if (reducedMotion) map.setView(target, zoom)
+          else map.flyTo(target, zoom, { duration: 0.9 })
+        }
+
+        if (coords.accuracy <= GOOD_ACCURACY_M) stopWatching()
       },
       (error) => {
+        // Transient failures mid-convergence must not discard a fix we already
+        // have; only report when we never got one.
+        if (bestAccuracyRef.current !== Infinity) return
+        stopWatching()
         setStatus('error')
         setErrorMessage(
           error.code === error.PERMISSION_DENIED
@@ -539,8 +586,8 @@ function LocationControl({
       },
       {
         enableHighAccuracy: true,
-        timeout: 10_000,
-        maximumAge: 15_000,
+        timeout: CONVERGENCE_WINDOW_MS,
+        maximumAge: 0,
       }
     )
   }
