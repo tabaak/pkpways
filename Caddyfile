@@ -14,3 +14,21 @@ pkpways.vokh.dev {
 	# inside that container, not on the host.
 	reverse_proxy frontend:3000
 }
+
+# hop tunnels — https://<name>.hop.vokh.dev reaches an agent's local port.
+#
+# The wildcard can only be validated by DNS-01, which is why this Caddy is
+# built with the Cloudflare provider (see caddy/Dockerfile).
+#
+# hopd runs on the host under systemd rather than in this stack, so tunnels
+# survive compose restarts; host.docker.internal is mapped to the docker0
+# bridge address by extra_hosts in docker-compose.yml.
+#
+# Deliberately no `encode` here: compressing tunnel traffic would interfere
+# with streaming responses (SSE, chunked) that pass through untouched.
+*.hop.vokh.dev {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+	reverse_proxy host.docker.internal:8080
+}
