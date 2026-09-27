@@ -102,7 +102,10 @@ services:
   # never calls the PKP API. Deliberately NOT published to the host — only the
   # caddy service can reach it.
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_CARTO_API_KEY: ${CARTO_API_KEY:-${NEXT_PUBLIC_CARTO_API_KEY:-}}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -112,6 +115,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pkpways}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pkpways}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      NEXT_PUBLIC_CARTO_API_KEY: ${CARTO_API_KEY:-${NEXT_PUBLIC_CARTO_API_KEY:-}}
     expose:
       - "3000"
     logging:
