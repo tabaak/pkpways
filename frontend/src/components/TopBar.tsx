@@ -22,9 +22,7 @@ export function TopBar({
       <div className="glass pointer-events-auto relative flex w-full max-w-4xl items-center gap-3 rounded-2xl px-3 py-2 sm:px-4 sm:py-2.5">
         {/* Brand */}
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white shadow-md">
-            <TrainGlyph className="h-5 w-5" />
-          </span>
+          <TrainGlyph className="h-6 w-6 shrink-0 text-slate-900 dark:text-white" />
           <div className="min-w-0 leading-tight">
             <h1 className="truncate text-[15px] font-semibold tracking-tight text-slate-900 dark:text-white">
               {t('appName')}
