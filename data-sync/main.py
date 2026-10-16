@@ -30,7 +30,7 @@ Config is read entirely from environment variables (see .env.example).
 from __future__ import annotations
 
 import datetime as dt
-import json
+import hashlib
 import logging
 import os
 import signal
@@ -42,6 +42,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import orjson
 import psycopg2
 import psycopg2.extras
 import redis
@@ -91,6 +92,15 @@ def _slim_train_for_cache(train: dict[str, Any]) -> dict[str, Any]:
         for stop in (train.get("stations") or [])
     ]
     return {**train, "stations": slim_stops}
+
+
+def _fingerprint(payload: bytes) -> bytes:
+    """A short digest of a serialised value, kept per run to detect changes.
+
+    16 bytes instead of the payload itself: ~40k runs of whole-route JSON would
+    otherwise pin tens of MB in the worker just to compare against next cycle.
+    """
+    return hashlib.blake2b(payload, digest_size=16).digest()
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -210,11 +220,13 @@ class PkpApiClient:
                 time.sleep(backoff)
                 continue
             response.raise_for_status()
-            return response.json()
+            # orjson: a full /operations page is tens of MB, and the stdlib
+            # parser was the largest single CPU cost of a cycle.
+            return orjson.loads(response.content)
         # Retries exhausted — raise the last 429 for the caller to log/skip.
         assert response is not None
         response.raise_for_status()
-        return response.json()
+        return orjson.loads(response.content)
 
     def get_operations(self, page_size: int = 10000) -> tuple[list[dict[str, Any]], dict[str, str]]:
         """Every currently-running train, whole route inline.
@@ -270,6 +282,11 @@ class Storage:
         self._config = config
         self._pg = psycopg2.connect(config.database_url)
         self._pg.autocommit = True
+        # Fingerprints of what was last written per run, so a cycle sends only
+        # runs that changed. Most of the fleet is identical between 30s polls.
+        # In-memory only: a restart starts empty and rewrites everything once.
+        self._pg_written: dict[tuple[int, int, str], bytes] = {}
+        self._redis_written: dict[str, bytes] = {}
         # Generous socket timeouts: a full national /operations cache is a large
         # write, and the default (no timeout / short) either hangs or trips
         # "Timeout writing to socket" under load.
@@ -351,25 +368,33 @@ class Storage:
         return len(rows)
 
     # --- train_runs (hot path) ------------------------------------------ #
-    def upsert_train_runs(self, trains: list[dict[str, Any]]) -> int:
+    def upsert_train_runs(self, trains: list[dict[str, Any]]) -> tuple[int, int]:
+        """Upsert runs that changed since the last cycle.
+
+        Returns (runs seen, runs sent to Postgres). Unchanged runs are skipped
+        before they reach the database, so Postgres no longer parses ~40k JSONB
+        routes per cycle only to discard them in the WHERE clause below — which
+        stays as a guard for the first cycle after a restart.
+        """
         today = dt.datetime.now(WARSAW_TZ).date().isoformat()
         rows = []
+        seen: dict[tuple[int, int, str], bytes] = {}
         for t in trains:
             schedule_id = t.get("scheduleId")
             order_id = t.get("orderId")
             if schedule_id is None or order_id is None:
                 continue
-            rows.append(
-                (
-                    int(schedule_id),
-                    int(order_id),
-                    t.get("operatingDate") or today,
-                    t.get("trainStatus"),
-                    json.dumps(t.get("stations") or []),  # whole route, verbatim
-                )
-            )
+            key = (int(schedule_id), int(order_id), t.get("operatingDate") or today)
+            status = t.get("trainStatus")
+            stops_json = orjson.dumps(t.get("stations") or [])  # whole route, verbatim
+            fingerprint = _fingerprint(str(status).encode() + b"\0" + stops_json)
+            seen[key] = fingerprint
+            if self._pg_written.get(key) == fingerprint:
+                continue
+            rows.append((*key, status, stops_json.decode()))
         if not rows:
-            return 0
+            self._pg_written = seen
+            return len(seen), 0
         with self._pg.cursor() as cur:
             psycopg2.extras.execute_batch(
                 cur,
@@ -387,7 +412,10 @@ class Storage:
                 rows,
                 page_size=1000,
             )
-        return len(rows)
+        # Only after the write succeeded; on failure the next cycle resends.
+        # Replacing (not merging) drops runs that left the API's window.
+        self._pg_written = seen
+        return len(seen), len(rows)
 
     def prune_old_runs(self) -> int:
         # Retain yesterday for overnight trains that remain in flight after
@@ -405,11 +433,43 @@ class Storage:
         trains: Iterable[dict[str, Any]],
         ttl_seconds: int,
         chunk: int,
-    ) -> list[str]:
-        """Write operation values in bounded pipelines and return their keys."""
+    ) -> tuple[list[str], int]:
+        """Write operation values in bounded pipelines.
+
+        Returns (all keys, number of values rewritten). A value identical to
+        the one written last cycle only gets its TTL extended: an EXPIRE instead
+        of re-sending ~35MB of fleet JSON for Redis to store again every poll.
+        """
         keys: list[str] = []
-        pipe = self._redis.pipeline()
-        pending = 0
+        written: dict[str, bytes] = {}
+        n_set = 0
+        # (redis key, payload, payload was SET rather than only EXPIREd)
+        batch: list[tuple[str, bytes, bool]] = []
+
+        def flush() -> None:
+            nonlocal n_set
+            pipe = self._redis.pipeline(transaction=False)
+            for redis_key, payload, is_set in batch:
+                if is_set:
+                    pipe.set(redis_key, payload, ex=ttl_seconds)
+                else:
+                    pipe.expire(redis_key, ttl_seconds)
+            results = pipe.execute()
+            # EXPIRE on a missing key returns False: the value expired or Redis
+            # restarted (it is non-persistent), so write it again right away.
+            missing = [
+                (redis_key, payload)
+                for (redis_key, payload, is_set), ok in zip(batch, results)
+                if not is_set and not ok
+            ]
+            if missing:
+                pipe = self._redis.pipeline(transaction=False)
+                for redis_key, payload in missing:
+                    pipe.set(redis_key, payload, ex=ttl_seconds)
+                pipe.execute()
+            n_set += sum(is_set for _, _, is_set in batch) + len(missing)
+            batch.clear()
+
         for train in trains:
             schedule_id = train.get("scheduleId")
             order_id = train.get("orderId")
@@ -420,23 +480,23 @@ class Storage:
             date = str(operating_date)[:10]
             run_key = f"{schedule_id}:{order_id}:{date}"
             keys.append(run_key)
-            pipe.set(
-                f"operation:{run_key}",
-                json.dumps(_slim_train_for_cache(train)),
-                ex=ttl_seconds,
-            )
-            pending += 1
+            payload = orjson.dumps(_slim_train_for_cache(train))
+            fingerprint = _fingerprint(payload)
+            written[run_key] = fingerprint
+            unchanged = self._redis_written.get(run_key) == fingerprint
+            batch.append((f"operation:{run_key}", payload, not unchanged))
 
             # Flush in chunks so we never buffer the whole national fleet into
             # one round trip (which overflows the socket write timeout).
-            if pending >= chunk:
-                pipe.execute()
-                pipe = self._redis.pipeline()
-                pending = 0
+            if len(batch) >= chunk:
+                flush()
 
-        if pending:
-            pipe.execute()
-        return keys
+        if batch:
+            flush()
+        # Only once every pipeline succeeded; after a failure the previous
+        # fingerprints stay, so the next cycle rewrites rather than skips.
+        self._redis_written = written
+        return keys, n_set
 
     def _replace_operations_index(self, keys: list[str]) -> None:
         """Publish a completed cache generation.
@@ -445,11 +505,11 @@ class Storage:
         for volatile eviction; if the worker stops, those values expire and the
         frontend safely skips the missing MGET results referenced by this index.
         """
-        self._redis.set("operations:index", json.dumps(keys))
+        self._redis.set("operations:index", orjson.dumps(keys))
 
     def cache_operations(
         self, trains: list[dict[str, Any]], ttl_seconds: int, chunk: int = 1000
-    ) -> int:
+    ) -> tuple[int, int]:
         """Cache only runs that could plausibly be moving right now.
 
         /operations returns a rolling ~7-day window (~40k trains), but a live
@@ -476,11 +536,11 @@ class Storage:
             for train in trains
             if str(train.get("operatingDate") or "")[:10] in wanted
         )
-        keys = self._cache_operation_values(current_trains, ttl_seconds, chunk)
+        keys, n_set = self._cache_operation_values(current_trains, ttl_seconds, chunk)
         # Publish the index only after every value pipeline succeeded. Readers
         # therefore continue using the previous complete generation on failure.
         self._replace_operations_index(keys)
-        return len(keys)
+        return len(keys), n_set
 
     def warm_cache_from_postgres(
         self, ttl_seconds: int, chunk: int = 1000
@@ -523,7 +583,7 @@ class Storage:
                             "stations": stops or [],
                         }
 
-                keys = self._cache_operation_values(
+                keys, _ = self._cache_operation_values(
                     cached_trains(), ttl_seconds, chunk
                 )
             self._pg.commit()
@@ -563,13 +623,17 @@ def sync_live(
         known_station_ids.update(int(sid) for sid in new_stations)
         log.info("Live: seeded %d new station name(s)", n_new)
 
-    n_runs = storage.upsert_train_runs(trains)
-    n_cached = storage.cache_operations(trains, ttl_seconds=config.cache_ttl_seconds)
+    n_runs, n_runs_written = storage.upsert_train_runs(trains)
+    n_cached, n_cached_written = storage.cache_operations(
+        trains, ttl_seconds=config.cache_ttl_seconds
+    )
     log.info(
-        "Live: %d train(s) -> train_runs, %d -> Redis (ttl %ds) "
-        "[fetch %.0fs, cycle %.0fs]",
+        "Live: %d train(s) -> train_runs (%d changed), %d -> Redis "
+        "(%d changed, ttl %ds) [fetch %.0fs, cycle %.0fs]",
         n_runs,
+        n_runs_written,
         n_cached,
+        n_cached_written,
         config.cache_ttl_seconds,
         fetch_seconds,
         time.monotonic() - started,
