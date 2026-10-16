@@ -35,13 +35,18 @@ docker compose logs -f data-sync
 A healthy cycle logs:
 
 ```
-Live: 38852 train(s) -> train_runs, 13282 -> Redis (ttl 1800s) [fetch 20s, cycle 30s]
+Live: 21495 train(s) -> train_runs (241 changed), 14524 -> Redis (241 changed, ttl 1800s) [fetch 7s, cycle 8s]
 ```
 
 `-> Redis` should be far smaller than `-> train_runs` (Postgres keeps the whole
 rolling week, Redis only currently-relevant runs). If they match, the
 operating-date filter isn't running. `cycle` must stay well under
 `CACHE_TTL_SECONDS`, or keys expire before their replacements are written.
+
+`changed` is usually 0, with a few hundred every few cycles: the PKP API
+refreshes about every 2.5 minutes, and only changed runs are written (the
+first cycle after a restart writes everything). If it stays 0 for many
+minutes while trains are running, the map has stopped updating.
 
 Local gitignored probe scripts (`operations.py`, `schedules.py`, `schedules.json`) exist for inspecting raw API responses — use them to confirm field names before changing extractors.
 

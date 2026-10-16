@@ -445,12 +445,13 @@ Startup: warmed 13282 current run(s) into Redis
 Daily: upserted 9231 train identity row(s)
 Daily: pruned 32450 stale train_run(s)
 Live: seeded 2967 new station name(s)
-Live: 38852 train(s) -> train_runs, 13282 -> Redis (ttl 1800s) [fetch 20s, cycle 30s]
+Live: 21495 train(s) -> train_runs (241 changed), 14524 -> Redis (241 changed, ttl 1800s) [fetch 7s, cycle 8s]
 ```
 
 Two numbers to watch on that last line:
 
 - **`-> Redis` is much smaller than `-> train_runs`** — and should be. Postgres keeps every run in the API's rolling week; Redis keeps only the currently-relevant ones. If the two are equal, the operating-date filter isn't running.
+- **`changed`** is usually 0, with a few hundred every few cycles: the PKP API refreshes its data about every 2.5 minutes, and only runs that changed are written. Unchanged Redis values just get their TTL extended. The first cycle after a restart writes everything.
 - **`cycle`** must stay well under `CACHE_TTL_SECONDS`. If it approaches it, keys start expiring before their replacements are written and the map blanks out.
 
 Verify data landed:
