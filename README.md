@@ -1,15 +1,34 @@
-# 🚂 PkpWays — Live Polish Railway Map
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/pkpways-logo-dark.svg">
+    <img src="docs/brand/pkpways-logo.svg" alt="PkpWays" height="72">
+  </picture>
+</p>
 
-> A real-time interactive map showing trains moving across the Polish railway network.
-> Built with **Next.js 16**, **Leaflet**, and the **PKP PLK Open Data API**.
+<p align="center">
+  <b>Every train in Poland, live on one map.</b><br>
+  Real-time train positions interpolated from PKP PLK schedules and delays, moving along real railway tracks.
+</p>
 
-**▶ Live at [pkpways.vokh.dev](https://pkpways.vokh.dev)**
+<p align="center">
+  <a href="https://pkpways.vokh.dev"><img alt="Live: pkpways.vokh.dev" src="https://img.shields.io/badge/live-pkpways.vokh.dev-2563EB?style=for-the-badge"></a>
+  <a href="https://pdp-api.plk-sa.pl"><img alt="Data: PKP PLK Open Data API" src="https://img.shields.io/badge/data-PKP%20PLK%20Open%20Data-003366?style=for-the-badge"></a>
+</p>
 
-[![Live](https://img.shields.io/badge/demo-pkpways.vokh.dev-2563eb)](https://pkpways.vokh.dev)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
-[![Leaflet](https://img.shields.io/badge/Leaflet-Interactive_Map-199900?logo=leaflet)](https://leafletjs.com)
-[![PKP PLK API](https://img.shields.io/badge/PKP_PLK-Open_Data_API-003366)](https://pdp-api.plk-sa.pl)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org)
+<p align="center">
+  <img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white">
+  <img alt="Tailwind CSS" src="https://img.shields.io/badge/Tailwind%20CSS-06B6D4?logo=tailwindcss&logoColor=white">
+  <img alt="Leaflet" src="https://img.shields.io/badge/Leaflet-199900?logo=leaflet&logoColor=white">
+  <img alt="OpenStreetMap" src="https://img.shields.io/badge/OpenStreetMap-7EBC6F?logo=openstreetmap&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white">
+  <img alt="PostgreSQL 18" src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white">
+  <img alt="Redis 8" src="https://img.shields.io/badge/Redis-8-DC382D?logo=redis&logoColor=white">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white">
+  <img alt="Caddy" src="https://img.shields.io/badge/Caddy-1F88C0?logo=caddy&logoColor=white">
+  <img alt="Let's Encrypt" src="https://img.shields.io/badge/Let%27s%20Encrypt-003A70?logo=letsencrypt&logoColor=white">
+</p>
 
 ---
 
